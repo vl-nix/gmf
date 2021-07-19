@@ -1,11 +1,14 @@
 ### [Gmf](https://github.com/vl-nix/gmf)
 
-* Simple File Manager
+* File Manager
+
 
 #### Dependencies
 
+* gcc, meson
 * libgtk 3.0 ( & dev )
 * [file-roller](https://wiki.gnome.org/Apps/FileRoller)
+
 
 #### Build
 

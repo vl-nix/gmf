@@ -1,4 +1,4 @@
-project('gmf', 'c', version: '21.7', meson_version: '>= 0.50.0', default_options: [ 'warning_level=2', 'c_std=gnu11'])
+project('gmf', 'c', version: '21.8', meson_version: '>= 0.50.0', default_options: [ 'warning_level=2', 'c_std=gnu11'])
 
 cc = meson.get_compiler('c')
 
@@ -43,6 +43,8 @@ test_cflags = [
 
 common_cflags = cc.get_supported_arguments(test_cflags)
 c_args += common_cflags
+
+subdir('data')
 
 c = run_command('sh', '-c', 'for file in src/*.h src/*.c; do echo $file; done')
 src = c.stdout().strip().split('\n')

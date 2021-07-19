@@ -10,9 +10,6 @@
 #include "gmf-icon-view.h"
 #include "gmf-dialog.h"
 
-#include <time.h>
-#include <errno.h>
-
 enum cols
 {
 	COL_PATH,
@@ -35,96 +32,73 @@ struct _GmfIcon
 
 	int icon_size;
 
+	uint src_update;
+
+	gboolean exit;
 	gboolean hidden;
 	gboolean reload;
 	gboolean preview;
-
-	struct timespec mt1, mt2;
 };
 
 G_DEFINE_TYPE ( GmfIcon, gmf_icon, GTK_TYPE_BOX )
 
-typedef struct _IconUpdate IconUpdate;
-
-struct _IconUpdate
+static void gmf_icon_set_pixbuf ( GtkTreeIter iter, GtkTreeModel *model, GmfIcon *icon )
 {
-	GMutex mutex;
+	char *path = NULL;
+	gboolean is_dir = FALSE, is_link = FALSE;
+	gtk_tree_model_get ( model, &iter, COL_IS_DIRECTORY, &is_dir, COL_IS_SYMLINK, &is_link, COL_PATH, &path, -1 );
 
-	GtkTreeIter iter;
-	GtkTreeModel *model;
+	GdkPixbuf *pixbuf = file_get_pixbuf ( path, is_dir, is_link, icon->preview, icon->icon_size );
 
-	GdkPixbuf *pixbuf;
-};
+	if ( pixbuf && !icon->exit ) gtk_list_store_set ( GTK_LIST_STORE ( model ), &iter, COL_IS_PIXBUF, TRUE, COL_PIXBUF, pixbuf, -1 );
 
-static gpointer icon_update_thread ( IconUpdate *iup )
-{
-	g_mutex_init ( &iup->mutex );
-
-	g_mutex_lock ( &iup->mutex );
-
-		gboolean is_pb = FALSE;
-		gtk_tree_model_get ( iup->model, &iup->iter, COL_IS_PIXBUF, &is_pb, -1 );
-
-		if ( !is_pb && iup->pixbuf )
-		{
-			gtk_list_store_set ( GTK_LIST_STORE ( iup->model ), &iup->iter, COL_IS_PIXBUF, TRUE, COL_PIXBUF, iup->pixbuf, -1 );
-
-			g_object_unref ( iup->pixbuf );
-		}
-
-	g_mutex_unlock ( &iup->mutex );
-
-	g_mutex_clear ( &iup->mutex );
-
-	free ( iup );
-
-	return NULL;
-}
-static void gmf_icon_update_pixbuf_set_thread ( GtkTreeIter iter, GtkTreeModel *model, GdkPixbuf *pixbuf )
-{
-	IconUpdate *iup = g_new0 ( IconUpdate, 1 );
-
-	iup->iter = iter;
-	iup->model = model;
-	iup->pixbuf = pixbuf;
-
-	GThread *thread = g_thread_new ( "icon-update-thread", (GThreadFunc)icon_update_thread, iup );
-	g_thread_unref ( thread );
-
+	free ( path );
+	if ( pixbuf ) g_object_unref ( pixbuf );
 }
 
 static void gmf_icon_update_pixbuf ( GmfIcon *icon )
 {
+	if ( icon->exit ) return;
+
 	GtkTreeIter iter;
 	GtkTreePath *start_path, *end_path;
 	GtkTreeModel *model = gtk_icon_view_get_model ( icon->icon_view );
 
-	gtk_icon_view_get_visible_range ( icon->icon_view, &start_path, &end_path );
+	int ind = gtk_tree_model_iter_n_children ( model, NULL );
 
-	uint16_t c = 0, add = 20;
+	if ( ind < 1 ) return;
 
-	for ( c = 0; c < add; c++ ) gtk_tree_path_next ( end_path );
+	if ( ind == 1 && gtk_tree_model_get_iter_first ( model, &iter ) )
+	{
+		gboolean is_pb = FALSE;
+		gtk_tree_model_get ( model, &iter, COL_IS_PIXBUF, &is_pb, -1 );
+
+		if ( !is_pb ) gmf_icon_set_pixbuf ( iter, model, icon );
+
+		return;
+	}
+
+	if ( !gtk_icon_view_get_visible_range ( icon->icon_view, &start_path, &end_path ) ) return;
+
+	int *ind_s = gtk_tree_path_get_indices ( start_path );
+	int *ind_e = gtk_tree_path_get_indices ( end_path   );
+	int indx = gtk_tree_model_iter_n_children ( model, NULL );
+
+	int c = 0, add = ( ind_e[0] - ind_s[0] ), end = ( ( indx - ind_e[0] ) > add ) ? add : ( indx - ind_e[0] );
+
+	for ( c = 0; c < end; c++ ) gtk_tree_path_next ( end_path );
 	for ( c = 0; c < add; c++ ) if ( !gtk_tree_path_prev ( start_path ) ) break;
 
 	while ( gtk_tree_path_compare ( start_path, end_path ) != 0 )
 	{
+		if ( icon->exit ) return;
+
 		if ( gtk_tree_model_get_iter ( model, &iter, start_path ) )
 		{
 			gboolean is_pb = FALSE;
 			gtk_tree_model_get ( model, &iter, COL_IS_PIXBUF, &is_pb, -1 );
 
-			if ( !is_pb )
-			{
-				char *path = NULL;
-				gboolean is_dir = FALSE, is_link = FALSE;
-				gtk_tree_model_get ( model, &iter, COL_IS_DIRECTORY, &is_dir, COL_IS_SYMLINK, &is_link, COL_PATH, &path, -1 );
-
-				GdkPixbuf *pixbuf = file_get_pixbuf ( path, is_dir, is_link, icon->preview, icon->icon_size );
-
-				gmf_icon_update_pixbuf_set_thread ( iter, model, pixbuf );
-
-				free ( path );
-			}
+			if ( !is_pb ) gmf_icon_set_pixbuf ( iter, model, icon );
 		}
 
 		gtk_tree_path_next ( start_path );
@@ -133,30 +107,82 @@ static void gmf_icon_update_pixbuf ( GmfIcon *icon )
 	gtk_tree_path_free ( end_path );
 	gtk_tree_path_free ( start_path );
 }
-
-static gboolean gmf_icon_update ( GmfIcon *icon )
+/*
+static gboolean gmf_icon_update_slow_timeout ( GmfIcon *icon )
 {
-	clock_gettime ( CLOCK_MONOTONIC, &icon->mt2 );
+	if ( icon->exit ) return FALSE;
 
-	uint16_t t_ms = (uint16_t)( ( icon->mt2.tv_sec * 1000 + icon->mt2.tv_nsec / 1000000 ) - ( icon->mt1.tv_sec * 1000 + icon->mt1.tv_nsec / 1000000 ) );
+	GtkTreeIter iter;
+	GtkTreePath *start_path, *end_path;
+	GtkTreeModel *model = gtk_icon_view_get_model ( icon->icon_view );
 
-	if ( t_ms > 100 )
+	int ind = gtk_tree_model_iter_n_children ( model, NULL );
+
+	if ( ind < 1 ) { icon->src_update = 0; return FALSE; }
+
+	if ( ind == 1 && gtk_tree_model_get_iter_first ( model, &iter ) )
 	{
-		clock_gettime ( CLOCK_MONOTONIC, &icon->mt1 );
+		gboolean is_pb = FALSE;
+		gtk_tree_model_get ( model, &iter, COL_IS_PIXBUF, &is_pb, -1 );
 
-		GtkTreeModel *model = gtk_icon_view_get_model ( icon->icon_view );
+		if ( !is_pb ) gmf_icon_set_pixbuf ( iter, model, icon );
 
-		int ind = gtk_tree_model_iter_n_children ( model, NULL );
-
-		if ( ind > 0 ) gmf_icon_update_pixbuf ( icon );
+		icon->src_update = 0;
+		return FALSE;
 	}
+
+	if ( !gtk_icon_view_get_visible_range ( icon->icon_view, &start_path, &end_path ) ) return FALSE;
+
+	int *ind_s = gtk_tree_path_get_indices ( start_path );
+	int *ind_e = gtk_tree_path_get_indices ( end_path   );
+	int indx = gtk_tree_model_iter_n_children ( model, NULL );
+
+	int c = 0, add = ( ind_e[0] - ind_s[0] ), end = ( ( indx - ind_e[0] ) > add ) ? add : ( indx - ind_e[0] );
+
+	for ( c = 0; c < end; c++ ) gtk_tree_path_next ( end_path );
+	for ( c = 0; c < add; c++ ) if ( !gtk_tree_path_prev ( start_path ) ) break;
+
+	while ( gtk_tree_path_compare ( start_path, end_path ) != 0 )
+	{
+		if ( icon->exit ) { icon->src_update = 0; return FALSE; }
+
+		if ( gtk_tree_model_get_iter ( model, &iter, start_path ) )
+		{
+			gboolean is_pb = FALSE;
+			gtk_tree_model_get ( model, &iter, COL_IS_PIXBUF, &is_pb, -1 );
+
+			if ( !is_pb ) { gmf_icon_set_pixbuf ( iter, model, icon ); return TRUE; }
+		}
+
+		gtk_tree_path_next ( start_path );
+	}
+
+	gtk_tree_path_free ( end_path );
+	gtk_tree_path_free ( start_path );
+
+	icon->src_update = 0;
+
+	return FALSE;
+}
+*/
+static void gmf_icon_update_scrool ( GmfIcon *icon )
+{
+	gmf_icon_update_pixbuf ( icon );
+	// if ( !icon->src_update ) { icon->src_update = g_timeout_add ( 250, (GSourceFunc)gmf_icon_update_slow_timeout, icon ); }
+}
+
+static gboolean gmf_icon_update_timeout ( GmfIcon *icon )
+{
+	gmf_icon_update_pixbuf ( icon );
 
 	return FALSE;
 }
 
 static void gmf_icon_open_location ( const char *search, GmfIcon *icon )
 {
-	clock_gettime ( CLOCK_MONOTONIC, &icon->mt1 );
+
+	// if ( icon->src_update ) g_source_remove ( icon->src_update );
+	// icon->src_update = 0;
 
 	GDir *dir = g_dir_open ( icon->path, 0, NULL );
 	if ( !dir ) return;
@@ -191,14 +217,14 @@ static void gmf_icon_open_location ( const char *search, GmfIcon *icon )
 				gtk_list_store_append ( GTK_LIST_STORE ( model ), &iter );
 
 				gtk_list_store_set ( GTK_LIST_STORE ( model ), &iter,
-				COL_PATH, path,
-				COL_DISPLAY_NAME, display_name,
-				COL_IS_DIRECTORY, is_dir,
-				COL_IS_SYMLINK, is_slk,
-				COL_IS_PIXBUF, FALSE,
-				COL_PIXBUF, pixbuf,
-				COL_SIZE, 0,
-				-1 );
+					COL_PATH, path,
+					COL_DISPLAY_NAME, display_name,
+					COL_IS_DIRECTORY, is_dir,
+					COL_IS_SYMLINK, is_slk,
+					COL_IS_PIXBUF, FALSE,
+					COL_PIXBUF, pixbuf,
+					COL_SIZE, 0,
+					-1 );
 			}
 
 			free ( path );
@@ -210,7 +236,7 @@ static void gmf_icon_open_location ( const char *search, GmfIcon *icon )
 
 	g_dir_close ( dir );
 
-	g_timeout_add ( 250, (GSourceFunc)gmf_icon_update, icon );
+	g_timeout_add ( 250, (GSourceFunc)gmf_icon_update_timeout, icon );
 }
 
 static void gmf_icon_item_activated ( GtkIconView *icon_view, GtkTreePath *tree_path, GmfIcon *icon )
@@ -230,6 +256,7 @@ static void gmf_icon_item_activated ( GtkIconView *icon_view, GtkTreePath *tree_
 		icon->path = g_strdup ( path );
 
 		gmf_icon_open_location ( NULL, icon );
+		g_signal_emit_by_name ( icon, "icon-add-tab", path );
 	}
 	else
 	{
@@ -243,11 +270,11 @@ static void gmf_icon_item_activated ( GtkIconView *icon_view, GtkTreePath *tree_
 	}
 }
 
-static gboolean gmf_icon_press_event ( G_GNUC_UNUSED GtkDrawingArea *draw, G_GNUC_UNUSED GdkEventButton *event, GmfIcon *gmf_icon )
+static gboolean gmf_icon_press_event ( G_GNUC_UNUSED GtkDrawingArea *draw, G_GNUC_UNUSED GdkEventButton *event, GmfIcon *icon )
 {
 	if ( event->button == 1 ) return FALSE;
 
-	if ( event->button == 3 ) { g_signal_emit_by_name ( gmf_icon, "icon-button-press", NULL ); return TRUE; }
+	if ( event->button == 3 ) { g_signal_emit_by_name ( icon, "icon-button-press", NULL ); return TRUE; }
 
 	return TRUE;
 }
@@ -255,14 +282,14 @@ static gboolean gmf_icon_press_event ( G_GNUC_UNUSED GtkDrawingArea *draw, G_GNU
 
 static gboolean gmf_icon_scroll_event ( G_GNUC_UNUSED GtkScrolledWindow *scw, G_GNUC_UNUSED GdkEventScroll *evscroll, GmfIcon *icon )
 {
-	gmf_icon_update ( icon );
+	gmf_icon_update_scrool ( icon );
 
 	return FALSE;
 }
 
 static void gmf_icon_scroll_changed ( G_GNUC_UNUSED GtkAdjustment *adj, GmfIcon *icon )
 {
-	gmf_icon_update ( icon );
+	gmf_icon_update_scrool ( icon );
 }
 
 static void gmf_icon_drag_data_input ( G_GNUC_UNUSED GtkIconView *icon_view, GdkDragContext *context, G_GNUC_UNUSED int x, G_GNUC_UNUSED int y, 
@@ -320,15 +347,15 @@ static void gmf_icon_drag_data_output ( GtkIconView *icon_view, G_GNUC_UNUSED Gd
 	g_strfreev ( uris );
 }
 
-static void gmf_icon_drag_drop ( GmfIcon *gmf_icon )
+static void gmf_icon_drag_drop ( GmfIcon *icon )
 {
 	GtkTargetEntry targets[] = { { "text/uri-list", GTK_TARGET_OTHER_WIDGET, 0 } };
 
-	gtk_icon_view_enable_model_drag_source ( gmf_icon->icon_view, GDK_BUTTON1_MASK, targets, G_N_ELEMENTS (targets), GDK_ACTION_COPY );
-	g_signal_connect ( gmf_icon->icon_view, "drag-data-get", G_CALLBACK ( gmf_icon_drag_data_output ), NULL );
+	gtk_icon_view_enable_model_drag_source ( icon->icon_view, GDK_BUTTON1_MASK, targets, G_N_ELEMENTS (targets), GDK_ACTION_COPY );
+	g_signal_connect ( icon->icon_view, "drag-data-get", G_CALLBACK ( gmf_icon_drag_data_output ), NULL );
 
-	gtk_icon_view_enable_model_drag_dest ( gmf_icon->icon_view, targets, G_N_ELEMENTS (targets), GDK_ACTION_COPY );
-	g_signal_connect ( gmf_icon->icon_view, "drag-data-received", G_CALLBACK ( gmf_icon_drag_data_input ), gmf_icon );	
+	gtk_icon_view_enable_model_drag_dest ( icon->icon_view, targets, G_N_ELEMENTS (targets), GDK_ACTION_COPY );
+	g_signal_connect ( icon->icon_view, "drag-data-received", G_CALLBACK ( gmf_icon_drag_data_input ), icon );	
 }
 
 static int gmf_icon_sort_func_a_z ( GtkTreeModel *model, GtkTreeIter *a, GtkTreeIter *b, G_GNUC_UNUSED gpointer data )
@@ -365,13 +392,14 @@ static GtkListStore * gmf_icon_create_store ( void )
 
 static void gmf_icon_handler_set_path ( GmfIcon *icon, const char *path )
 {
-	if ( path )
+	if ( path && g_file_test ( path, G_FILE_TEST_IS_DIR ) )
 	{
 		free ( icon->path );
 		icon->path = g_strdup ( path );
 	}
 
 	gmf_icon_open_location ( NULL, icon );
+	g_signal_emit_by_name ( icon, "icon-add-tab", path );
 }
 
 static void gmf_icon_handler_up_path ( GmfIcon *icon )
@@ -409,6 +437,18 @@ static void gmf_icon_handler_reload ( GmfIcon *icon )
 	gmf_icon_open_location ( NULL, icon );
 }
 
+static void gmf_icon_handler_set_search ( GmfIcon *icon, const char *str )
+{
+	gmf_icon_open_location ( str, icon );
+}
+
+static void gmf_icon_handler_set_size ( GmfIcon *icon, uint size )
+{
+	icon->icon_size = (int)size;
+	gmf_icon_open_location ( NULL, icon );
+}
+
+
 static GList * gmf_icon_handler_get_selected_path ( GmfIcon *icon )
 {
 	GList *list_ret = NULL;
@@ -439,16 +479,18 @@ static void gmf_icon_quit ( GmfIcon *icon )
 	gtk_icon_view_unselect_all ( icon->icon_view );
 }
 
-static void gmf_icon_init ( GmfIcon *gmf_icon )
+static void gmf_icon_init ( GmfIcon *icon )
 {
-	gmf_icon->hidden = FALSE;
-	gmf_icon->preview = TRUE;
-	gmf_icon->icon_size  = 48; // ICON_SIZE;
-	gmf_icon->path = g_strdup ( g_get_home_dir () );
+	icon->exit = FALSE;
+	icon->hidden = FALSE;
+	icon->preview = TRUE;
+	icon->icon_size  = 48;
+	icon->src_update = 0;
+	icon->path = g_strdup ( g_get_home_dir () );
 
-	GtkBox *v_box = GTK_BOX ( gmf_icon );
+	GtkBox *v_box = GTK_BOX ( icon );
 	gtk_orientable_set_orientation ( GTK_ORIENTABLE ( v_box ), GTK_ORIENTATION_VERTICAL );
-	g_signal_connect ( gmf_icon, "destroy", G_CALLBACK ( gmf_icon_quit ), NULL );
+	g_signal_connect ( icon, "destroy", G_CALLBACK ( gmf_icon_quit ), NULL );
 	gtk_widget_set_visible ( GTK_WIDGET ( v_box ), TRUE );
 
 	GtkScrolledWindow *scw = (GtkScrolledWindow *)gtk_scrolled_window_new ( NULL, NULL );
@@ -456,48 +498,51 @@ static void gmf_icon_init ( GmfIcon *gmf_icon )
 	gtk_widget_set_visible ( GTK_WIDGET ( scw ), TRUE );
 
 	GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment ( scw );
-	g_signal_connect ( adj, "value-changed", G_CALLBACK ( gmf_icon_scroll_changed ), gmf_icon );
+	g_signal_connect ( adj, "value-changed", G_CALLBACK ( gmf_icon_scroll_changed ), icon );
 
-	gmf_icon->icon_view = (GtkIconView *)gtk_icon_view_new ();
-	gtk_widget_set_visible ( GTK_WIDGET ( gmf_icon->icon_view ), TRUE );
+	icon->icon_view = (GtkIconView *)gtk_icon_view_new ();
+	gtk_widget_set_visible ( GTK_WIDGET ( icon->icon_view ), TRUE );
 
 	GtkListStore *store = gmf_icon_create_store ();
-	gtk_icon_view_set_model ( gmf_icon->icon_view, GTK_TREE_MODEL ( store ) );
+	gtk_icon_view_set_model ( icon->icon_view, GTK_TREE_MODEL ( store ) );
 	g_object_unref ( G_OBJECT ( store ) );
 
-	gtk_icon_view_set_item_width    ( gmf_icon->icon_view, 80 );
-	gtk_icon_view_set_pixbuf_column ( gmf_icon->icon_view, COL_PIXBUF );
-	gtk_icon_view_set_text_column   ( gmf_icon->icon_view, COL_DISPLAY_NAME );
+	gtk_icon_view_set_item_width    ( icon->icon_view, 80 );
+	gtk_icon_view_set_pixbuf_column ( icon->icon_view, COL_PIXBUF );
+	gtk_icon_view_set_text_column   ( icon->icon_view, COL_DISPLAY_NAME );
 
-	gtk_icon_view_set_selection_mode ( gmf_icon->icon_view, GTK_SELECTION_MULTIPLE );
+	gtk_icon_view_set_selection_mode ( icon->icon_view, GTK_SELECTION_MULTIPLE );
 
 	gtk_widget_set_visible ( GTK_WIDGET ( scw ), TRUE );
-	gtk_widget_set_visible ( GTK_WIDGET ( gmf_icon->icon_view ), TRUE );
+	gtk_widget_set_visible ( GTK_WIDGET ( icon->icon_view ), TRUE );
 
-	gmf_icon_drag_drop ( gmf_icon );
+	gmf_icon_drag_drop ( icon );
 
-	gtk_widget_set_events ( GTK_WIDGET ( gmf_icon->icon_view ), GDK_BUTTON_PRESS_MASK );
-	g_signal_connect ( gmf_icon->icon_view, "item-activated",  G_CALLBACK ( gmf_icon_item_activated ), gmf_icon );
-	g_signal_connect ( gmf_icon->icon_view, "button-press-event", G_CALLBACK ( gmf_icon_press_event ), gmf_icon );
-	g_signal_connect ( scw, "scroll-event",  G_CALLBACK ( gmf_icon_scroll_event ), gmf_icon );
+	gtk_widget_set_events ( GTK_WIDGET ( icon->icon_view ), GDK_BUTTON_PRESS_MASK );
+	g_signal_connect ( icon->icon_view, "item-activated",  G_CALLBACK ( gmf_icon_item_activated ), icon );
+	g_signal_connect ( icon->icon_view, "button-press-event", G_CALLBACK ( gmf_icon_press_event ), icon );
+	g_signal_connect ( scw, "scroll-event",  G_CALLBACK ( gmf_icon_scroll_event ), icon );
 
-	gtk_container_add ( GTK_CONTAINER ( scw ), GTK_WIDGET ( gmf_icon->icon_view ) );
+	gtk_container_add ( GTK_CONTAINER ( scw ), GTK_WIDGET ( icon->icon_view ) );
 
 	gtk_box_pack_start ( v_box, GTK_WIDGET ( scw ), TRUE, TRUE, 0 );
 
-	g_signal_connect ( gmf_icon, "icon-reload",   G_CALLBACK ( gmf_icon_handler_reload   ), NULL );
-	g_signal_connect ( gmf_icon, "icon-up-path",  G_CALLBACK ( gmf_icon_handler_up_path  ), NULL );
-	g_signal_connect ( gmf_icon, "icon-get-path", G_CALLBACK ( gmf_icon_handler_get_path ), NULL );
-	g_signal_connect ( gmf_icon, "icon-set-path", G_CALLBACK ( gmf_icon_handler_set_path ), NULL );
-	g_signal_connect ( gmf_icon, "icon-set-hidden", G_CALLBACK ( gmf_icon_handler_set_hidden ), NULL );
-	g_signal_connect ( gmf_icon, "icon-get-selected-num",  G_CALLBACK ( gmf_icon_handler_get_selected_num  ), NULL );
-	g_signal_connect ( gmf_icon, "icon-get-selected-path", G_CALLBACK ( gmf_icon_handler_get_selected_path ), NULL );
+	g_signal_connect ( icon, "icon-reload",   G_CALLBACK ( gmf_icon_handler_reload   ), NULL );
+	g_signal_connect ( icon, "icon-up-path",  G_CALLBACK ( gmf_icon_handler_up_path  ), NULL );
+	g_signal_connect ( icon, "icon-get-path", G_CALLBACK ( gmf_icon_handler_get_path ), NULL );
+	g_signal_connect ( icon, "icon-set-path", G_CALLBACK ( gmf_icon_handler_set_path ), NULL );
+	g_signal_connect ( icon, "icon-set-size", G_CALLBACK ( gmf_icon_handler_set_size ), NULL );
+	g_signal_connect ( icon, "icon-set-search", G_CALLBACK ( gmf_icon_handler_set_search ), NULL );
+	g_signal_connect ( icon, "icon-set-hidden", G_CALLBACK ( gmf_icon_handler_set_hidden ), NULL );
+	g_signal_connect ( icon, "icon-get-selected-num",  G_CALLBACK ( gmf_icon_handler_get_selected_num  ), NULL );
+	g_signal_connect ( icon, "icon-get-selected-path", G_CALLBACK ( gmf_icon_handler_get_selected_path ), NULL );
 }
 
 static void gmf_icon_finalize ( GObject *object )
 {
 	GmfIcon *icon = GMF_ICON (object);
 
+	icon->exit = TRUE;
 	free ( icon->path );
 
 	G_OBJECT_CLASS (gmf_icon_parent_class)->finalize (object);
@@ -519,6 +564,15 @@ static void gmf_icon_class_init ( GmfIconClass *class )
 		0, NULL, NULL, NULL, G_TYPE_STRING, 0 );
 
 	g_signal_new ( "icon-set-path", G_TYPE_FROM_CLASS ( class ), G_SIGNAL_RUN_LAST,
+		0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING );
+
+	g_signal_new ( "icon-set-size", G_TYPE_FROM_CLASS ( class ), G_SIGNAL_RUN_LAST,
+		0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_UINT );
+
+	g_signal_new ( "icon-set-search", G_TYPE_FROM_CLASS ( class ), G_SIGNAL_RUN_LAST,
+		0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING );
+
+	g_signal_new ( "icon-add-tab", G_TYPE_FROM_CLASS ( class ), G_SIGNAL_RUN_LAST,
 		0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING );
 
 	g_signal_new ( "icon-set-hidden", G_TYPE_FROM_CLASS ( class ), G_SIGNAL_RUN_LAST,
