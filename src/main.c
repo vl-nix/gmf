@@ -1,5 +1,5 @@
 /*
-* Copyright 2020 Stepan Perun
+* Copyright 2021 Stepan Perun
 * This program is free software.
 *
 * License: Gnu General Public License GPL-3
@@ -11,7 +11,11 @@
 
 int main ( int argc, char *argv[] )
 {
-	GmfApp *app = gmf_app_new ();
+	gboolean dialog = FALSE;
+
+	if ( argc > 1 && argv[1] && g_str_has_prefix ( argv[1], "--dialog-" ) ) dialog = TRUE;
+
+	GmfApp *app = gmf_app_new ( dialog );
 
 	int status = g_application_run ( G_APPLICATION ( app ), argc, argv );
 

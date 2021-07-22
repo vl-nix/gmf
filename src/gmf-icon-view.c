@@ -1,5 +1,5 @@
 /*
-* Copyright 2020 Stepan Perun
+* Copyright 2021 Stepan Perun
 * This program is free software.
 *
 * License: Gnu General Public License GPL-3
@@ -27,6 +27,8 @@ struct _GmfIcon
 	GtkBox parent_instance;
 
 	GtkIconView *icon_view;
+
+	GFileMonitor *monitor;
 
 	char *path;
 
@@ -180,7 +182,6 @@ static gboolean gmf_icon_update_timeout ( GmfIcon *icon )
 
 static void gmf_icon_open_location ( const char *search, GmfIcon *icon )
 {
-
 	// if ( icon->src_update ) g_source_remove ( icon->src_update );
 	// icon->src_update = 0;
 
@@ -239,6 +240,49 @@ static void gmf_icon_open_location ( const char *search, GmfIcon *icon )
 	g_timeout_add ( 250, (GSourceFunc)gmf_icon_update_timeout, icon );
 }
 
+static void gmf_icon_changed_monitor ( G_GNUC_UNUSED GFileMonitor *monitor, G_GNUC_UNUSED GFile *file, G_GNUC_UNUSED GFile *other, GFileMonitorEvent evtype, GmfIcon *icon )
+{
+	gboolean reload = FALSE;
+
+	switch ( evtype )
+	{
+		case G_FILE_MONITOR_EVENT_CHANGED:           reload = FALSE; break;
+		case G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT: reload = TRUE;  break;
+		case G_FILE_MONITOR_EVENT_DELETED:           reload = TRUE;  break;
+		case G_FILE_MONITOR_EVENT_CREATED:           reload = TRUE;  break;
+		case G_FILE_MONITOR_EVENT_ATTRIBUTE_CHANGED: reload = FALSE; break;
+		case G_FILE_MONITOR_EVENT_RENAMED:           reload = TRUE;  break;
+		case G_FILE_MONITOR_EVENT_MOVED_IN:          reload = TRUE;  break;
+		case G_FILE_MONITOR_EVENT_MOVED_OUT:         reload = TRUE;  break;
+
+		default: break;
+	}
+
+	if ( reload ) g_signal_emit_by_name ( icon, "icon-reload" );
+}
+
+static void gmf_icon_run_monitor ( GmfIcon *icon )
+{
+	GFile *file = g_file_new_for_path ( icon->path );
+
+	if ( icon->monitor )
+	{
+		g_signal_handlers_disconnect_by_func ( icon->monitor, gmf_icon_changed_monitor, icon );
+
+		g_file_monitor_cancel ( icon->monitor );
+
+		g_object_unref ( icon->monitor );
+	}
+
+	icon->monitor = g_file_monitor ( file, G_FILE_MONITOR_WATCH_MOVES, NULL, NULL );
+
+	if ( icon->monitor == NULL ) return;
+
+	g_signal_connect ( icon->monitor, "changed", G_CALLBACK ( gmf_icon_changed_monitor ), icon );
+
+	g_object_unref ( file );
+}
+
 static void gmf_icon_item_activated ( GtkIconView *icon_view, GtkTreePath *tree_path, GmfIcon *icon )
 {
 	g_autofree char *path = NULL;
@@ -256,7 +300,10 @@ static void gmf_icon_item_activated ( GtkIconView *icon_view, GtkTreePath *tree_
 		icon->path = g_strdup ( path );
 
 		gmf_icon_open_location ( NULL, icon );
+
 		g_signal_emit_by_name ( icon, "icon-add-tab", path );
+
+		gmf_icon_run_monitor ( icon );
 	}
 	else
 	{
@@ -303,9 +350,7 @@ static void gmf_icon_drag_data_input ( G_GNUC_UNUSED GtkIconView *icon_view, Gdk
 	{
 		char **uris = gtk_selection_data_get_uris ( s_data );
 
-		free ( icon->path );
-		icon->path = g_filename_from_uri ( uris[0], NULL, NULL );
-		gmf_icon_open_location ( NULL, icon );
+		gmf_copy_dialog ( icon->path, uris, C_CP, NULL );
 
 		g_strfreev ( uris );
 
@@ -399,7 +444,10 @@ static void gmf_icon_handler_set_path ( GmfIcon *icon, const char *path )
 	}
 
 	gmf_icon_open_location ( NULL, icon );
+
 	g_signal_emit_by_name ( icon, "icon-add-tab", path );
+
+	gmf_icon_run_monitor ( icon );
 }
 
 static void gmf_icon_handler_up_path ( GmfIcon *icon )
@@ -487,6 +535,8 @@ static void gmf_icon_init ( GmfIcon *icon )
 	icon->icon_size  = 48;
 	icon->src_update = 0;
 	icon->path = g_strdup ( g_get_home_dir () );
+
+	icon->monitor = NULL;
 
 	GtkBox *v_box = GTK_BOX ( icon );
 	gtk_orientable_set_orientation ( GTK_ORIENTABLE ( v_box ), GTK_ORIENTATION_VERTICAL );

@@ -1,5 +1,5 @@
 /*
-* Copyright 2020 Stepan Perun
+* Copyright 2021 Stepan Perun
 * This program is free software.
 *
 * License: Gnu General Public License GPL-3
@@ -32,7 +32,7 @@ void gmf_recent_dialog ( GtkWindow * );
 
 void gmf_info_dialog ( GFile *, GmfWin * );
 void gmf_dfe_dialog  ( enum d_num , GmfWin * );
-void gmf_copy_dialog ( const char *, GList *, enum c_num, GmfWin * );
+void gmf_copy_dialog ( const char *, char **, enum c_num, GApplication *app );
 
 void exec ( GFile *, GtkWindow * );
 void launch_cmd ( const char *, GtkWindow * );

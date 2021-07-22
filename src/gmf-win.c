@@ -1,5 +1,5 @@
 /*
-* Copyright 2020 Stepan Perun
+* Copyright 2021 Stepan Perun
 * This program is free software.
 *
 * License: Gnu General Public License GPL-3
@@ -138,8 +138,6 @@ static void gmf_win_clic_rmv ( GmfWin *win )
 	}
 
 	g_list_free_full ( list, (GDestroyNotify) g_free );
-
-	gmf_win_clic_rld ( win );
 }
 
 static void gmf_win_clic_arc ( GmfWin *win )
@@ -197,6 +195,17 @@ static void gmf_win_clic_inf ( GmfWin *win )
 
 		g_object_unref ( file );
 	}
+	else
+	{
+		g_autofree char *path = NULL;
+		g_signal_emit_by_name ( win->icon_view, "icon-get-path", &path );
+
+		GFile *file = g_file_new_for_path ( path );
+
+		gmf_info_dialog ( file, win );
+
+		g_object_unref ( file );
+	}
 
 	g_list_free_full ( list, (GDestroyNotify) g_free );
 }
@@ -212,21 +221,18 @@ static void gmf_win_copy ( GmfWin *win )
 
 	if ( clipboard_text )
 	{
-		GList *list_cl = NULL;
-
 		char **fields = g_strsplit ( clipboard_text, "\n", 0 );
 		uint j = 0, numfields = g_strv_length ( fields );
 
-		for ( j = 0; j < numfields; j++ )
-		{
-			if ( g_file_test ( fields[j], G_FILE_TEST_EXISTS ) )
-				list_cl = g_list_prepend ( list_cl, fields[j] );
-		}
+		char *uris[numfields+1];
 
-		if ( list_cl ) gmf_copy_dialog ( path, list_cl, win->cp_mv, win );
+		for ( j = 0; j < numfields; j++ ) uris[j] = fields[j];
+
+		uris[j] = NULL;
+
+		if ( numfields ) gmf_copy_dialog ( path, uris, win->cp_mv, NULL );
 
 		g_strfreev ( fields );
-		g_list_free ( list_cl );
 		free ( clipboard_text );
 	}
 }
@@ -236,12 +242,12 @@ static void gmf_win_set_clipboard ( GmfWin *win )
 	GList *list = NULL;
 	g_signal_emit_by_name ( win->icon_view, "icon-get-selected-path", &list );
 
-	GString *gstring = g_string_new ( NULL );
+	GString *gstring = g_string_new ( (char *)list->data );
+	list = list->next;
 
 	while ( list != NULL )
 	{
-		g_string_append_printf ( gstring, "%s\n", (char *)list->data );
-
+		g_string_append_printf ( gstring, "\n%s", (char *)list->data );
 		list = list->next;
 	}
 
@@ -335,8 +341,6 @@ static void gmf_win_apply_dfe_handler ( GmfWin *win, uint8_t num, const char *st
 	if ( num == D_DR ) gmf_win_dir_new ( string, win );
 	if ( num == D_FL ) gmf_win_file_new ( string, win );
 	if ( num == D_ED ) gmf_win_edit_name ( string, win );
-
-	gmf_win_clic_rld ( win );
 
 	if ( win->debug ) g_message ( "%s:: num: %u, string: %s ", __func__, num, string );
 }
