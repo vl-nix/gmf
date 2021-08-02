@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=@NAME@
+Comment=@COMMENT@
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=@TERMINAL@
+Type=@TYPE@
+Categories=@CATEGORIES@

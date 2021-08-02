@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="gmf">
+  <schema id="org.gtk.gmf" path="/org/gtk/gmf/">
+    <key name="dark" type="b">
+      <default>false</default>
+    </key>
+    <key name="icon-size" type="u">
+      <default>48</default>
+    </key>
+    <key name="opacity" type="u">
+      <default>100</default>
+    </key>
+    <key name="preview" type="b">
+      <default>true</default>
+    </key>
+    <key name="theme" type="s">
+      <default>'none'</default>
+    </key>
+    <key name="icon-theme" type="s">
+      <default>'none'</default>
+    </key>
+    <key name="width" type="u">
+      <default>700</default>
+    </key>
+    <key name="height" type="u">
+      <default>350</default>
+    </key>
+  </schema>
+</schemalist>

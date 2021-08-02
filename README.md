@@ -1,2 +1,0 @@
-# gmf
-Simple File Manager
