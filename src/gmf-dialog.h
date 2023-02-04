@@ -1,5 +1,5 @@
 /*
-* Copyright 2021 Stepan Perun
+* Copyright 2022 Stepan Perun
 * This program is free software.
 *
 * License: Gnu General Public License GPL-3
@@ -9,34 +9,22 @@
 
 #pragma once
 
-#include "gmf-win.h"
-
-enum d_num 
-{
-	D_DR,
-	D_FL,
-	D_ED,
-	D_ALL
-};
-
-void gmf_trash_dialog  ( GtkWindow * );
-void gmf_recent_dialog ( GtkWindow * );
-
-void gmf_about ( GtkWindow * );
-char * gmf_open_dir ( const char *, GtkWindow * );
-void gmf_app_chooser_dialog ( GFile *, GList *, GtkWindow * );
-void gmf_dfe_dialog ( const char *, enum d_num , GmfWin * );
-void gmf_message_dialog ( const char *, const char *, GtkMessageType , GtkWindow * );
-
-void exec ( GFile *, GtkWindow * );
-void launch_cmd ( const char *, GtkWindow * );
-void launch_app ( GFile *, GAppInfo *, GtkWindow * );
-
-GtkImage * create_image ( const char *, uint8_t );
-GtkButton * button_set_image ( const char *, uint8_t );
+#include <gtk/gtk.h>
 
 ulong get_file_size ( const char * );
+
 gboolean link_exists ( const char * );
 GIcon * emblemed_icon ( const char *, GIcon * );
-GdkPixbuf * file_get_pixbuf ( const char *, gboolean , gboolean , gboolean , int );
+GdkPixbuf * get_pixbuf ( const char *, gboolean, uint16_t );
 
+void gmf_activated_file ( GFile *, GtkWindow * );
+void gmf_launch_cmd ( const char *, GtkWindow * );
+
+void gmf_dialog_trash  ( GtkWindow * );
+void gmf_dialog_recent ( GtkWindow * );
+
+void gmf_dialog_about ( GtkWindow * );
+void gmf_dialog_app_chooser ( GFile *, GtkWindow * );
+void gmf_dialog_copy_dir_err ( GList *, GtkWindow * );
+void gmf_dialog_message ( const char *, const char *, GtkMessageType , GtkWindow * );
+char * gmf_dialog_open_dir ( const char *, const char *, const char *, uint8_t, GtkWindow * );

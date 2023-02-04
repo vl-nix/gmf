@@ -1,5 +1,5 @@
 /*
-* Copyright 2021 Stepan Perun
+* Copyright 2022 Stepan Perun
 * This program is free software.
 *
 * License: Gnu General Public License GPL-3
@@ -15,5 +15,4 @@
 
 G_DECLARE_FINAL_TYPE ( GmfWin, gmf_win, GMF, WIN, GtkWindow )
 
-GmfWin * gmf_win_new ( const char *, GmfApp * );
-
+GmfWin * gmf_win_new ( GFile *, GmfApp * );

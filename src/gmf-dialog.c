@@ -1,5 +1,5 @@
 /*
-* Copyright 2021 Stepan Perun
+* Copyright 2022 Stepan Perun
 * This program is free software.
 *
 * License: Gnu General Public License GPL-3
@@ -11,7 +11,6 @@
 
 #include <errno.h>
 #include <sys/stat.h>
-#include <glib/gstdio.h>
 
 ulong get_file_size ( const char *file )
 {
@@ -26,7 +25,7 @@ ulong get_file_size ( const char *file )
 
 gboolean link_exists ( const char *path )
 {
-	gboolean link_exists = FALSE;
+	gboolean link_exist = FALSE;
 
 	g_autofree char *link = g_file_read_link ( path, NULL );
 
@@ -37,12 +36,12 @@ gboolean link_exists ( const char *path )
 		g_autofree char *dirname = g_path_get_dirname ( path );
 		g_autofree char *real = g_build_filename ( dirname, link, NULL );
 
-		link_exists = g_file_test ( real, G_FILE_TEST_EXISTS );
+		link_exist = g_file_test ( real, G_FILE_TEST_EXISTS );
 	}
 	else
-		link_exists = g_file_test ( link, G_FILE_TEST_EXISTS );
+		link_exist = g_file_test ( link, G_FILE_TEST_EXISTS );
 
-	return link_exists;
+	return link_exist;
 }
 
 GIcon * emblemed_icon ( const char *name, GIcon *gicon )
@@ -58,53 +57,40 @@ GIcon * emblemed_icon ( const char *name, GIcon *gicon )
 	return emblemed;
 }
 
-static gboolean get_icon_names ( GIcon *icon )
+GdkPixbuf * get_pixbuf ( const char *path, gboolean is_link, uint16_t icon_size )
 {
-	const char **names = g_themed_icon_get_names ( G_THEMED_ICON ( icon ) );
-
-	gboolean has_icon = gtk_icon_theme_has_icon ( gtk_icon_theme_get_default (), names[0] );
-
-	if ( !has_icon && names[1] != NULL ) has_icon = gtk_icon_theme_has_icon ( gtk_icon_theme_get_default (), names[1] );
-
-	return has_icon;
-}
-
-GdkPixbuf * file_get_pixbuf ( const char *path, gboolean is_dir, gboolean is_link, gboolean preview, int icon_size )
-{
-	g_return_val_if_fail ( path != NULL, NULL );
-
-	if ( !g_file_test ( path, G_FILE_TEST_EXISTS ) ) return NULL;
-
 	GdkPixbuf *pixbuf = NULL;
-
-	GtkIconTheme *itheme = gtk_icon_theme_get_default ();
 
 	GFile *file = g_file_new_for_path ( path );
 	GFileInfo *finfo = g_file_query_info ( file, "*", 0, NULL, NULL );
 
-	const char *mime_type = ( finfo ) ? g_file_info_get_content_type ( finfo ) : NULL;
-
-	if ( mime_type && preview && g_str_has_prefix ( mime_type, "image" ) )
-		pixbuf = gdk_pixbuf_new_from_file_at_size ( path, icon_size, icon_size, NULL );
-
-	if ( pixbuf == NULL )
+	if ( finfo )
 	{
-		gboolean is_link_exist = ( is_link ) ? link_exists ( path ) : FALSE;
+		GtkIconInfo *icon_info = NULL;
+		GIcon *emblemed = NULL, *unknown = NULL, *gicon = g_file_info_get_icon ( finfo );
 
-		GIcon *emblemed = NULL, *icon_set = ( finfo ) ? g_file_info_get_icon ( finfo ) : NULL;
+		if ( is_link )
+		{
+			gboolean is_exist = FALSE;
+			const char *target = g_file_info_get_symlink_target ( finfo );
 
-		gboolean has_icon = ( icon_set ) ? get_icon_names ( icon_set ) : FALSE;
+			if ( target ) is_exist = link_exists ( path );
 
-		if ( !has_icon ) icon_set = g_themed_icon_new ( ( is_dir ) ? "folder" : "unknown" );
+			if ( !is_exist ) unknown = g_themed_icon_new ( "unknown" );
 
-		if ( is_link ) emblemed = emblemed_icon ( ( !is_link_exist ) ? "error" : "emblem-symbolic-link", icon_set );
+			emblemed = ( is_exist ) ? emblemed_icon ( "emblem-symbolic-link", gicon ) : emblemed_icon ( "error", unknown );
 
-		GtkIconInfo *icon_info = gtk_icon_theme_lookup_by_gicon ( itheme, ( is_link ) ? emblemed : icon_set, icon_size, GTK_ICON_LOOKUP_FORCE_SIZE );
+			icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), emblemed, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+		}
+		else
+			icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), gicon, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
 
-		pixbuf = ( icon_info ) ? gtk_icon_info_load_icon ( icon_info, NULL ) : NULL;
+		// if ( !icon_info ) icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), unknown, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
 
+		if ( icon_info ) pixbuf = gtk_icon_info_load_icon ( icon_info, NULL );
+
+		if ( unknown ) g_object_unref ( unknown );
 		if ( emblemed ) g_object_unref ( emblemed );
-		if ( !has_icon && icon_set ) g_object_unref ( icon_set );
 		if ( icon_info ) g_object_unref ( icon_info );
 	}
 
@@ -114,36 +100,14 @@ GdkPixbuf * file_get_pixbuf ( const char *path, gboolean is_dir, gboolean is_lin
 	return pixbuf;
 }
 
-GtkImage * create_image ( const char *icon, uint8_t size )
-{
-	GdkPixbuf *pixbuf = gtk_icon_theme_load_icon ( gtk_icon_theme_get_default (), icon, size, GTK_ICON_LOOKUP_FORCE_SIZE, NULL );
-
-	GtkImage *image   = (GtkImage *)gtk_image_new_from_pixbuf ( pixbuf );
-	gtk_image_set_pixel_size ( image, size );
-
-	if ( pixbuf ) g_object_unref ( pixbuf );
-
-	return image;
-}
-
-GtkButton * button_set_image ( const char *icon, uint8_t size )
-{
-	GtkButton *button = (GtkButton *)gtk_button_new ();
-
-	GtkImage *image   = create_image ( icon, size );
-	gtk_button_set_image ( button, GTK_WIDGET ( image ) );
-
-	return button;
-}
-
-void gmf_about ( GtkWindow *window )
+void gmf_dialog_about ( GtkWindow *window )
 {
 	GtkAboutDialog *dialog = (GtkAboutDialog *)gtk_about_dialog_new ();
 	gtk_window_set_transient_for ( GTK_WINDOW ( dialog ), window );
 
 	gtk_about_dialog_set_logo_icon_name ( dialog, "system-file-manager" );
 	gtk_window_set_icon_name ( GTK_WINDOW ( dialog ), "system-file-manager" );
-	gtk_widget_set_opacity   ( GTK_WIDGET ( dialog ), gtk_widget_get_opacity ( GTK_WIDGET ( window ) ) );
+	if ( window && GTK_IS_WINDOW ( window ) )gtk_widget_set_opacity ( GTK_WIDGET ( dialog ), gtk_widget_get_opacity ( GTK_WIDGET ( window ) ) );
 
 	const char *authors[] = { "Stepan Perun", " ", NULL };
 
@@ -152,225 +116,48 @@ void gmf_about ( GtkWindow *window )
 	gtk_about_dialog_set_license_type ( dialog, GTK_LICENSE_GPL_3_0 );
 	gtk_about_dialog_set_authors ( dialog, authors );
 	gtk_about_dialog_set_website ( dialog,   "https://github.com/vl-nix/gmf" );
-	gtk_about_dialog_set_copyright ( dialog, "Copyright 2021 Gmf" );
+	gtk_about_dialog_set_copyright ( dialog, "Copyright 2022 Gmf" );
 	gtk_about_dialog_set_comments  ( dialog, "File manager" );
 
 	gtk_dialog_run ( GTK_DIALOG (dialog) );
 	gtk_widget_destroy ( GTK_WIDGET (dialog) );
 }
 
-void gmf_message_dialog ( const char *f_error, const char *file_or_info, GtkMessageType mesg_type, GtkWindow *window )
+void gmf_dialog_message ( const char *f_error, const char *file_or_info, GtkMessageType mesg_type, GtkWindow *window )
 {
-	GtkMessageDialog *dialog = ( GtkMessageDialog *)gtk_message_dialog_new ( window, GTK_DIALOG_MODAL, mesg_type, 
-		GTK_BUTTONS_CLOSE, "%s\n%s", f_error, file_or_info );
+	GtkMessageDialog *dialog = ( GtkMessageDialog *)gtk_message_dialog_new ( window, GTK_DIALOG_MODAL, mesg_type, GTK_BUTTONS_CLOSE, "%s\n%s", f_error, file_or_info );
 
 	gtk_window_set_icon_name ( GTK_WINDOW ( dialog ), "system-file-manager" );
+	if ( window && GTK_IS_WINDOW ( window ) ) gtk_widget_set_opacity ( GTK_WIDGET ( dialog ), gtk_widget_get_opacity ( GTK_WIDGET ( window ) ) );
 
 	gtk_dialog_run     ( GTK_DIALOG ( dialog ) );
 	gtk_widget_destroy ( GTK_WIDGET ( dialog ) );
 }
 
-void launch_cmd ( const char *cmd, GtkWindow *window )
+char * gmf_dialog_open_dir ( const char *path, const char *accept, const char *icon, uint8_t num, GtkWindow *window )
 {
-	GAppInfo *app = g_app_info_create_from_commandline ( cmd, NULL, 0, NULL );
+	GtkFileChooserDialog *dialog = ( GtkFileChooserDialog *)gtk_file_chooser_dialog_new ( " ", window, num, "gtk-cancel", GTK_RESPONSE_CANCEL, accept, GTK_RESPONSE_ACCEPT, NULL );
 
-	if ( app )
-	{
-		GError *error = NULL;
-		g_app_info_launch ( app, NULL, NULL, &error );
-
-		if ( error )
-		{
-			gmf_message_dialog ( "", error->message, GTK_MESSAGE_WARNING, window );
-			g_error_free ( error );
-		}
-
-		g_object_unref ( app );
-	}
-}
-
-void launch_app ( GFile *file, GAppInfo *appi, GtkWindow *window )
-{
-	GError *error = NULL;
-	GList *list   = NULL;
-
-	list = g_list_append ( list, file );
-
-	g_app_info_launch ( appi, list, NULL, &error );
-
-	if ( error )
-	{
-		gmf_message_dialog ( "", error->message, GTK_MESSAGE_WARNING, window );
-		g_error_free ( error );
-	}
-
-	g_list_free ( list );
-}
-
-static void gmf_win_run_exec  ( GtkButton *button, char *path ) 
-{
-	GtkWidget *toplevel = gtk_widget_get_toplevel ( GTK_WIDGET ( button ) );
-
-	launch_cmd ( path, GTK_WINDOW ( toplevel ) );
-}
-
-static void gmf_win_run_trml  ( GtkButton *button, char *path ) 
-{
-	g_autofree char *pwd = g_get_current_dir ();
-	g_autofree char *dir = g_path_get_dirname ( path );
-	g_autofree char *cmd = g_strconcat ( "/usr/bin/x-terminal-emulator -e ", path, NULL );
-
-	g_chdir ( dir );
-
-	GtkWidget *toplevel = gtk_widget_get_toplevel ( GTK_WIDGET ( button ) );
-	
-	launch_cmd ( cmd, GTK_WINDOW ( toplevel ) );
-
-	g_chdir ( pwd );
-}
-
-static void gmf_win_run_edit ( GtkButton *button, char *path ) 
-{
-	GtkWidget *toplevel = gtk_widget_get_toplevel ( GTK_WIDGET ( button ) );
-
-	GFile *file = g_file_new_for_path ( path );
-	GFileInfo *file_info = g_file_query_info ( file, "standard::*", 0, NULL, NULL );
-
-	const char *mime_type = ( file_info ) ? g_file_info_get_content_type ( file_info ) : NULL;
-
-	GAppInfo *app_info = ( mime_type ) ? g_app_info_get_default_for_type ( mime_type, FALSE ) : NULL;
-
-	launch_app ( file, app_info, GTK_WINDOW ( toplevel ) );
-
-	g_object_unref ( file );
-	if ( file_info ) g_object_unref ( file_info );
-	if ( app_info  ) g_object_unref ( app_info  );
-}
-
-static void gmf_win_run_destroy ( G_GNUC_UNUSED GtkWindow *window, char *path )
-{
-	free ( path );
-}
-
-static void exec_dialog ( GFile *file, gboolean edit, GtkWindow *win_base )
-{
-	char *path = g_file_get_path ( file );
-
-	GtkWindow *window = (GtkWindow *)gtk_window_new ( GTK_WINDOW_TOPLEVEL );
-	gtk_window_set_title ( window, "" );
-	gtk_window_set_modal ( window, TRUE );
-	if ( GTK_IS_WINDOW ( win_base ) ) gtk_window_set_transient_for ( window, win_base );
-	gtk_window_set_icon_name ( window, "system-run" );
-	gtk_window_set_default_size ( window, 300, -1 );
-	g_signal_connect ( window, "destroy", G_CALLBACK ( gmf_win_run_destroy ), path );
-
-	GtkBox *v_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_VERTICAL,  10 );
-	GtkBox *h_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_HORIZONTAL, 5 );
-
-	gtk_widget_set_visible ( GTK_WIDGET ( v_box ), TRUE );
-	gtk_widget_set_visible ( GTK_WIDGET ( h_box ), TRUE );
-
-	uint8_t c = 0, n = ( edit ) ? 0 : 1;
-	const char *labels[] = { "gtk-edit", "terminal", "system-run", "window-close" };
-	const void *funcs[]  = { gmf_win_run_edit, gmf_win_run_trml, gmf_win_run_exec, NULL };
-
-	for ( c = n; c < G_N_ELEMENTS ( labels ); c++ )
-	{
-		GtkButton *button = button_set_image ( labels[c], 16 );
-
-		if ( funcs[c] ) g_signal_connect ( button, "clicked", G_CALLBACK ( funcs[c] ), path );
-		g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( gtk_widget_destroy ), window );
-
-		gtk_widget_set_visible (  GTK_WIDGET ( button ), TRUE );
-		gtk_box_pack_start ( h_box, GTK_WIDGET ( button  ), TRUE, TRUE, 0 );
-	}
-
-	gtk_box_pack_end ( v_box, GTK_WIDGET ( h_box ), FALSE, FALSE, 0 );
-
-	gtk_container_set_border_width ( GTK_CONTAINER ( v_box ), 10 );
-	gtk_container_add   ( GTK_CONTAINER ( window ), GTK_WIDGET ( v_box ) );
-
-	gtk_window_present ( window );
-
-	if ( GTK_IS_WINDOW ( win_base ) ) gtk_widget_set_opacity ( GTK_WIDGET ( window ), gtk_widget_get_opacity ( GTK_WIDGET ( win_base ) ) );
-}
-
-void exec ( GFile *file, GtkWindow *window )
-{
-	GFileInfo *file_info = g_file_query_info ( file, "standard::*", 0, NULL, NULL );
-
-	if ( file_info == NULL )
-	{
-		g_autofree char *path = g_file_get_path ( file );
-
-		if ( g_file_test ( path, G_FILE_TEST_IS_EXECUTABLE ) )
-			exec_dialog ( file, FALSE, window );
-		else
-			gmf_app_chooser_dialog ( file, NULL, window );
-
-		return;
-	}
-
-	const char *mime_type = ( file_info ) ? g_file_info_get_content_type ( file_info ) : NULL;
-
-	if ( mime_type && ( g_str_has_suffix ( mime_type, "desktop" ) || g_str_has_suffix ( mime_type, "script" )
-		|| g_str_has_suffix ( mime_type, "perl" ) || g_str_has_suffix ( mime_type, "python" ) ) )
-	{
-		exec_dialog ( file, TRUE, window );
-
-		g_object_unref ( file_info );
-
-		return;
-	}
-
-	GAppInfo *app_info = ( mime_type ) ? g_app_info_get_default_for_type ( mime_type, FALSE ) : NULL;
-
-	if ( app_info ) 
-	{
-		launch_app ( file, app_info, window );
-
-		g_object_unref ( app_info );
-	}
-	else
-	{
-		g_autofree char *path = g_file_get_path ( file );
-
-		if ( g_file_test ( path, G_FILE_TEST_IS_EXECUTABLE ) )
-			exec_dialog ( file, FALSE, window );
-		else
-			gmf_app_chooser_dialog ( file, NULL, window );
-	}
-
-	g_object_unref ( file_info );
-}
-
-char * gmf_open_dir ( const char *path, GtkWindow *window )
-{
-	GtkFileChooserDialog *dialog = (GtkFileChooserDialog *)gtk_file_chooser_dialog_new (
-		" ",  window, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
-		"gtk-cancel", GTK_RESPONSE_CANCEL,
-		"gtk-apply",  GTK_RESPONSE_ACCEPT,
-		NULL );
-
-	gtk_window_set_icon_name ( GTK_WINDOW ( dialog ), "folder-open" );
-	if ( GTK_IS_WINDOW ( window ) ) gtk_widget_set_opacity ( GTK_WIDGET ( dialog ), gtk_widget_get_opacity ( GTK_WIDGET ( window ) ) );
+	gtk_window_set_icon_name ( GTK_WINDOW ( dialog ), icon );
+	if ( window && GTK_IS_WINDOW ( window ) ) gtk_widget_set_opacity ( GTK_WIDGET ( dialog ), gtk_widget_get_opacity ( GTK_WIDGET ( window ) ) );
 
 	gtk_file_chooser_set_current_folder ( GTK_FILE_CHOOSER ( dialog ), path );
+	gtk_file_chooser_set_select_multiple ( GTK_FILE_CHOOSER ( dialog ), FALSE );
 
-	char *dirname = NULL;
+	char *filename = NULL;
 
-	if ( gtk_dialog_run ( GTK_DIALOG ( dialog ) ) == GTK_RESPONSE_ACCEPT )
-		dirname = gtk_file_chooser_get_filename ( GTK_FILE_CHOOSER ( dialog ) );
+	if ( gtk_dialog_run ( GTK_DIALOG ( dialog ) ) == GTK_RESPONSE_ACCEPT ) filename = gtk_file_chooser_get_filename ( GTK_FILE_CHOOSER ( dialog ) );
 
 	gtk_widget_destroy ( GTK_WIDGET ( dialog ) );
 
-	return dirname;
+	return filename;
 }
 
-void gmf_app_chooser_dialog ( GFile *file, GList *list, GtkWindow *window )
+void gmf_dialog_app_chooser ( GFile *file, GtkWindow *window )
 {
 	GAppInfo *app_info = NULL;
 	GtkAppChooserDialog *dialog = (GtkAppChooserDialog *)gtk_app_chooser_dialog_new ( window, GTK_DIALOG_MODAL, file );
+
 	if ( window && GTK_IS_WINDOW ( window ) ) gtk_widget_set_opacity ( GTK_WIDGET ( dialog ), gtk_widget_get_opacity ( GTK_WIDGET ( window ) ) );
 
 	int result = gtk_dialog_run ( GTK_DIALOG (dialog) );
@@ -386,30 +173,18 @@ void gmf_app_chooser_dialog ( GFile *file, GList *list, GtkWindow *window )
 				GError *error = NULL;
 				GList *list_f = NULL;
 
-				if ( list )
-				{
-					while ( list != NULL )
-					{
-						list_f = g_list_append ( list_f, g_file_new_for_path ( (char *)list->data ) );
-
-						list = list->next;
-					}
-				}
-				else
-					list_f = g_list_append ( list_f, file );
+				list_f = g_list_append ( list_f, file );
 
 				g_app_info_launch ( app_info, list_f, NULL, &error );
 
 				if ( error )
 				{
-					gmf_message_dialog ( "", error->message, GTK_MESSAGE_WARNING, window );
+					gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window );
+
 					g_error_free ( error );
 				}
 
-				if ( list )
-					g_list_free_full ( list_f, (GDestroyNotify) g_object_unref );
-				else
-					g_list_free ( list_f );
+				g_list_free ( list_f );
 
 				g_object_unref ( app_info );
 			}
@@ -424,6 +199,72 @@ void gmf_app_chooser_dialog ( GFile *file, GList *list, GtkWindow *window )
 	gtk_widget_destroy ( GTK_WIDGET (dialog) );
 }
 
+void gmf_launch_cmd ( const char *cmd, GtkWindow *window )
+{
+	GAppInfo *app = g_app_info_create_from_commandline ( cmd, NULL, 0, NULL );
+
+	if ( app )
+	{
+		GError *error = NULL;
+		g_app_info_launch ( app, NULL, NULL, &error );
+
+		if ( error )
+		{
+			gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window );
+
+			g_error_free ( error );
+		}
+
+		g_object_unref ( app );
+	}
+}
+
+static void gmf_launch_app ( GFile *file, GtkWindow *window )
+{
+	GError *error = NULL;
+	GList *list   = NULL;
+
+	list = g_list_append ( list, file );
+
+	GFileInfo *file_info = g_file_query_info ( file, "standard::*", 0, NULL, NULL );
+
+	const char *mime_type = ( file_info ) ? g_file_info_get_content_type ( file_info ) : NULL;
+
+	GAppInfo *app_info = ( mime_type ) ? g_app_info_get_default_for_type ( mime_type, FALSE ) : NULL;
+
+	g_app_info_launch ( app_info, list, NULL, &error );
+
+	if ( error ) { gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window ); g_error_free ( error ); }
+
+	if ( file_info ) g_object_unref ( file_info );
+	if ( app_info  ) g_object_unref ( app_info  );
+
+	g_list_free ( list );
+}
+
+void gmf_activated_file ( GFile *file, GtkWindow *window )
+{
+	GFileInfo *file_info = g_file_query_info ( file, "standard::*", 0, NULL, NULL );
+
+	if ( file_info )
+	{
+		g_autofree char *path = g_file_get_path ( file );
+
+		const char *mime_type = g_file_info_get_content_type ( file_info );
+
+		g_debug ( "%s:: mime_type: %s ", __func__, mime_type );
+
+		if ( mime_type && g_str_equal ( mime_type, "application/x-executable" ) )
+			gmf_launch_cmd ( path, window );
+		else
+			gmf_launch_app ( file, window );
+
+		g_object_unref ( file_info );
+	}
+	else
+		gmf_dialog_app_chooser ( file, window );
+}
+
 static void gmf_recent_run_item ( GtkRecentChooser *chooser )
 {
 	GtkRecentInfo *info = gtk_recent_chooser_get_current_item ( chooser );
@@ -434,11 +275,13 @@ static void gmf_recent_run_item ( GtkRecentChooser *chooser )
 
 		GFile *file = g_file_new_for_uri ( gtk_recent_info_get_uri (info) );
 
-		exec ( file, GTK_WINDOW ( toplevel ) );
+		gmf_activated_file ( file, GTK_WINDOW ( toplevel ) );
 
 		g_object_unref ( file );
 
 		gtk_recent_info_unref ( info );
+
+		if ( toplevel && GTK_IS_WIDGET ( toplevel ) ) gtk_widget_destroy ( toplevel );
 	}
 }
 
@@ -461,7 +304,7 @@ static void gmf_recent_clear ( void )
 	g_object_unref ( mn );
 }
 
-void gmf_recent_dialog ( GtkWindow *win_base )
+void gmf_dialog_recent ( GtkWindow *win_base )
 {
 	GtkWindow *window = (GtkWindow *)gtk_window_new ( GTK_WINDOW_TOPLEVEL );
 	gtk_window_set_title ( window, "" );
@@ -483,17 +326,15 @@ void gmf_recent_dialog ( GtkWindow *win_base )
 
 	gtk_box_pack_start ( v_box, GTK_WIDGET ( recent ), TRUE, TRUE, 0 );
 
-	const char *labels[] = { "window-close" , "edit-clear", "system-run" };
-	const void *funcs[] = { gtk_widget_destroy, gmf_recent_clear, gmf_recent_run };
+	const char *labels[] = { "window-close", "edit-clear", "system-run" };
+	const void *funcs[] = { NULL, gmf_recent_clear, gmf_recent_run };
 
 	uint8_t c = 0; for ( c = 0; c < G_N_ELEMENTS ( labels ); c++ )
 	{
-		GtkButton *button = button_set_image ( labels[c], 16 );
+		GtkButton *button = (GtkButton *)gtk_button_new_from_icon_name ( labels[c], GTK_ICON_SIZE_MENU );
 
-		( c == 0 ) ? g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( gtk_widget_destroy ), window )
-			   : g_signal_connect ( button, "clicked", G_CALLBACK ( funcs[c] ), recent );
-
-		if ( c == 2 ) g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( gtk_widget_destroy ), window );
+		if ( funcs[c] ) g_signal_connect ( button, "clicked", G_CALLBACK ( funcs[c] ), recent );
+		if ( c == 0 ) g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( gtk_widget_destroy ), window );
 
 		gtk_widget_set_visible (  GTK_WIDGET ( button ), TRUE );
 		gtk_box_pack_start ( h_box, GTK_WIDGET ( button  ), TRUE, TRUE, 0 );
@@ -506,7 +347,7 @@ void gmf_recent_dialog ( GtkWindow *win_base )
 
 	gtk_window_present ( window );
 
-	gtk_widget_set_opacity ( GTK_WIDGET ( window ), gtk_widget_get_opacity ( GTK_WIDGET ( win_base ) ) );
+	if ( win_base && GTK_IS_WINDOW ( win_base ) ) gtk_widget_set_opacity ( GTK_WIDGET ( window ), gtk_widget_get_opacity ( GTK_WIDGET ( win_base ) ) );
 }
 
 static void gmf_trash_treeview_add ( const char *name, const char *path, GFile *file, GtkListStore *store )
@@ -517,8 +358,7 @@ static void gmf_trash_treeview_add ( const char *name, const char *path, GFile *
 
 	GtkIconInfo *icon_info = ( icon ) ? gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), icon, 16, GTK_ICON_LOOKUP_FORCE_REGULAR ) : NULL;
 
-	GdkPixbuf *pixbuf = ( icon_info ) ? gtk_icon_info_load_icon ( icon_info, NULL )
-					  : gtk_icon_theme_load_icon ( gtk_icon_theme_get_default (), "unknown", 16, GTK_ICON_LOOKUP_FORCE_REGULAR, NULL );
+	GdkPixbuf *pixbuf = ( icon_info ) ? gtk_icon_info_load_icon ( icon_info, NULL ) : gtk_icon_theme_load_icon ( gtk_icon_theme_get_default (), "unknown", 16, GTK_ICON_LOOKUP_FORCE_REGULAR, NULL );
 
 	GtkTreeIter iter;
 	gtk_list_store_append ( store, &iter );
@@ -571,7 +411,7 @@ static gboolean gmf_trash_files ( gboolean add, gboolean clear, gboolean undelet
 				if ( err != NULL )
 				{
 					ret = TRUE;
-					gmf_message_dialog ( "", err->message, GTK_MESSAGE_WARNING, NULL );
+					gmf_dialog_message ( "", err->message, GTK_MESSAGE_WARNING, NULL );
 					g_error_free ( err );
 				}
 			}
@@ -584,7 +424,7 @@ static gboolean gmf_trash_files ( gboolean add, gboolean clear, gboolean undelet
 				if ( err != NULL )
 				{
 					ret = TRUE;
-					gmf_message_dialog ( "", err->message, GTK_MESSAGE_WARNING, NULL );
+					gmf_dialog_message ( "", err->message, GTK_MESSAGE_WARNING, NULL );
 					g_error_free ( err );
 				}
 			}
@@ -604,7 +444,7 @@ static gboolean gmf_trash_files ( gboolean add, gboolean clear, gboolean undelet
 	if ( error != NULL )
 	{
 		ret = TRUE;
-		gmf_message_dialog ( "", error->message, GTK_MESSAGE_WARNING, NULL );
+		gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, NULL );
 		g_error_free ( error );
 	}
 
@@ -669,7 +509,7 @@ static GtkTreeView * gmf_trash_create_treeview ( void )
 	return treeview;
 }
 
-void gmf_trash_dialog ( GtkWindow *win_base )
+void gmf_dialog_trash ( GtkWindow *win_base )
 {
 	GtkWindow *window = (GtkWindow *)gtk_window_new ( GTK_WINDOW_TOPLEVEL );
 	gtk_window_set_title ( window, "" );
@@ -695,15 +535,15 @@ void gmf_trash_dialog ( GtkWindow *win_base )
 
 	gtk_box_pack_start ( v_box, GTK_WIDGET ( scw ), TRUE, TRUE, 0 );
 
-	const char *labels[] = { "window-close" , "edit-clear", "gtk-undelete" };
-	const void *funcs[] = { gtk_widget_destroy, gmf_trash_clear, gmf_trash_undelete };
+	const char *labels[] = { "window-close", "edit-clear", "gtk-undelete" };
+	const void *funcs[] = { NULL, gmf_trash_clear, gmf_trash_undelete };
 
 	uint8_t c = 0; for ( c = 0; c < G_N_ELEMENTS ( labels ); c++ )
 	{
-		GtkButton *button = button_set_image ( labels[c], 16 );
+		GtkButton *button = (GtkButton *)gtk_button_new_from_icon_name ( labels[c], GTK_ICON_SIZE_MENU );
 
-		( c == 0 ) ? g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( funcs[c] ), window )
-			   : g_signal_connect ( button, "clicked", G_CALLBACK ( funcs[c] ), treeview );
+		if ( funcs[c] ) g_signal_connect ( button, "clicked", G_CALLBACK ( funcs[c] ), treeview );
+		if ( c == 0 ) g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( gtk_widget_destroy ), window );
 
 		gtk_widget_set_visible (  GTK_WIDGET ( button ), TRUE );
 		gtk_box_pack_start ( h_box, GTK_WIDGET ( button  ), TRUE, TRUE, 0 );
@@ -716,70 +556,18 @@ void gmf_trash_dialog ( GtkWindow *win_base )
 
 	gtk_window_present ( window );
 
-	gtk_widget_set_opacity ( GTK_WIDGET ( window ), gtk_widget_get_opacity ( GTK_WIDGET ( win_base ) ) );
+	if ( win_base && GTK_IS_WINDOW ( win_base ) ) gtk_widget_set_opacity ( GTK_WIDGET ( window ), gtk_widget_get_opacity ( GTK_WIDGET ( win_base ) ) );
 }
 
-const char *d_icons[D_ALL][2] = 
-{
-	[D_DR] = { "folder-new",   "New-folder"   },
-	[D_FL] = { "document-new", "New-document" },
-	[D_ED] = { "gtk-edit",     "New-name"     }
-};
-
-static void gmf_dfe_dialog_apply_entry ( GtkEntry *entry, GmfWin *win )
-{
-	const char *text = gtk_entry_get_text ( entry );
-	const char *name = gtk_widget_get_name ( GTK_WIDGET ( entry ) );
-
-	uint8_t num = ( uint8_t )( atoi ( name ) );
-
-	g_signal_emit_by_name ( win, "win-apply-dfe", num, text );
-
-	GtkWindow *window = GTK_WINDOW ( gtk_widget_get_toplevel ( GTK_WIDGET ( entry ) ) );
-
-	gtk_widget_destroy ( GTK_WIDGET ( window ) );
-}
-
-static void gmf_dfe_dialog_icon_press_entry ( GtkEntry *entry, GtkEntryIconPosition icon_pos, G_GNUC_UNUSED GdkEventButton *event, GmfWin *win )
-{
-	if ( icon_pos == GTK_ENTRY_ICON_PRIMARY   ) gtk_entry_set_text ( entry, "" );
-	if ( icon_pos == GTK_ENTRY_ICON_SECONDARY ) gmf_dfe_dialog_apply_entry ( entry, win );
-}
-
-static void gmf_dfe_dialog_activate_entry ( GtkEntry *entry, GmfWin *win )
-{
-	gmf_dfe_dialog_apply_entry ( entry, win );
-}
-
-static GtkEntry * gmf_dfe_dialog_create_entry ( enum d_num num, const char *text, GmfWin *win )
-{
-	GtkEntry *entry = (GtkEntry *)gtk_entry_new ();
-	gtk_entry_set_text ( entry, ( text ) ? text : "" );
-
-	char buf[10];
-	sprintf ( buf, "%u", num );
-	gtk_widget_set_name ( GTK_WIDGET ( entry ), buf );
-
-	gtk_entry_set_icon_from_icon_name ( entry, GTK_ENTRY_ICON_PRIMARY, "edit-clear" );
-	gtk_entry_set_icon_from_icon_name ( entry, GTK_ENTRY_ICON_SECONDARY, "dialog-apply" );
-
-	g_signal_connect ( entry, "activate",   G_CALLBACK ( gmf_dfe_dialog_activate_entry   ), win );
-	g_signal_connect ( entry, "icon-press", G_CALLBACK ( gmf_dfe_dialog_icon_press_entry ), win );
-
-	gtk_widget_set_visible ( GTK_WIDGET ( entry ), TRUE );
-
-	return entry;
-}
-
-void gmf_dfe_dialog ( const char *name, enum d_num num, GmfWin *win )
+void gmf_dialog_copy_dir_err ( GList *list, GtkWindow *win_base )
 {
 	GtkWindow *window = (GtkWindow *)gtk_window_new ( GTK_WINDOW_TOPLEVEL );
 	gtk_window_set_title ( window, "" );
 	gtk_window_set_modal ( window, TRUE );
-	gtk_window_set_transient_for ( window, GTK_WINDOW ( win ) );
-	gtk_window_set_icon_name ( window, d_icons[num][0] );
-	gtk_window_set_default_size ( window, 400, -1 );
-	gtk_window_set_position ( window, GTK_WIN_POS_CENTER_ON_PARENT );
+	gtk_window_set_transient_for ( window, win_base );
+	gtk_window_set_icon_name ( window, "dialog-warning" );
+	gtk_window_set_default_size ( window, 500, 350  );
+	gtk_window_set_position ( window, GTK_WIN_POS_CENTER );
 
 	GtkBox *v_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_VERTICAL,  10 );
 	GtkBox *h_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_HORIZONTAL, 5 );
@@ -787,14 +575,38 @@ void gmf_dfe_dialog ( const char *name, enum d_num num, GmfWin *win )
 	gtk_widget_set_visible ( GTK_WIDGET ( v_box ), TRUE );
 	gtk_widget_set_visible ( GTK_WIDGET ( h_box ), TRUE );
 
-	GtkEntry *entry = gmf_dfe_dialog_create_entry ( num, ( name ) ? name : d_icons[num][1], win );
-	gtk_box_pack_start ( h_box, GTK_WIDGET ( entry ), TRUE, TRUE, 0 );
+	GtkScrolledWindow *scw = (GtkScrolledWindow *)gtk_scrolled_window_new ( NULL, NULL );
+	gtk_scrolled_window_set_policy ( scw, GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC );
+	gtk_widget_set_visible ( GTK_WIDGET ( scw ), TRUE );
 
-	GtkButton *button = button_set_image ( "window-close", 16 );
+	GtkTextView *text_view = (GtkTextView *)gtk_text_view_new ();
+	gtk_text_view_set_editable ( text_view, FALSE );
+	gtk_text_view_set_wrap_mode ( text_view, GTK_WRAP_WORD );
+	gtk_text_view_set_left_margin ( text_view, 10 );
+	gtk_text_view_set_right_margin ( text_view, 10 );
+	gtk_widget_set_visible ( GTK_WIDGET ( text_view ), TRUE );
+
+	GtkTextIter iter;
+	GtkTextBuffer *buffer = (GtkTextBuffer *)gtk_text_view_get_buffer ( text_view );
+	gtk_text_buffer_get_start_iter ( buffer, &iter );
+
+	while ( list != NULL )
+	{
+		gtk_text_buffer_insert ( buffer, &iter, (char *)list->data, -1 );
+		gtk_text_buffer_insert ( buffer, &iter, "\n", -1 );
+
+		list = list->next;
+	}
+
+	gtk_container_add ( GTK_CONTAINER ( scw ), GTK_WIDGET ( text_view ) );
+
+	gtk_box_pack_start ( v_box, GTK_WIDGET ( scw ), TRUE, TRUE, 0 );
+
+	GtkButton *button = (GtkButton *)gtk_button_new_from_icon_name ( "window-close", GTK_ICON_SIZE_MENU );
 	g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( gtk_widget_destroy ), window );
 
-	gtk_widget_set_visible ( GTK_WIDGET ( button ), TRUE );
-	gtk_box_pack_start ( h_box, GTK_WIDGET ( button ), FALSE, FALSE, 0 );
+	gtk_widget_set_visible (  GTK_WIDGET ( button ), TRUE );
+	gtk_box_pack_start ( h_box, GTK_WIDGET ( button  ), TRUE, TRUE, 0 );
 
 	gtk_box_pack_end ( v_box, GTK_WIDGET ( h_box ), FALSE, FALSE, 0 );
 
@@ -803,6 +615,5 @@ void gmf_dfe_dialog ( const char *name, enum d_num num, GmfWin *win )
 
 	gtk_window_present ( window );
 
-	gtk_widget_set_opacity ( GTK_WIDGET ( window ), gtk_widget_get_opacity ( GTK_WIDGET ( win ) ) );
+	if ( win_base && GTK_IS_WINDOW ( win_base ) ) gtk_widget_set_opacity ( GTK_WIDGET ( window ), gtk_widget_get_opacity ( GTK_WIDGET ( win_base ) ) );
 }
-

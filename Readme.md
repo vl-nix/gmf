@@ -1,24 +1,25 @@
 ### [Gmf](https://github.com/vl-nix/gmf)
 
 * File Manager
-* Shortcuts: Ctrl + X, Ctrl + C, Ctrl + V, Ctrl + H, Delete
+* Copy & Paste: Drag and Drop
 
 
 #### Dependencies
 
-* gcc, meson
+* gcc
+* meson
 * libgtk 3.0 ( & dev )
 * File-roller or Engrampa
 
 
 #### Build
 
-1. Configure: meson build --prefix /usr --strip
+1. Clone: git clone https://github.com/vl-nix/gmf.git
 
-2. Build: ninja -C build
+2. Configure: meson build --prefix /usr --strip
 
-3. Install: sudo ninja -C build install
+3. Build: ninja -C build
 
-4. Uninstall: sudo ninja -C build uninstall
+4. Install: ninja install -C build
 
-5. Debug: GMF_DEBUG=1 gmf
+5. Uninstall: ninja uninstall -C build
