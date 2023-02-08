@@ -8,8 +8,8 @@
 */
 
 #include "gmf-win.h"
-#include "info-win.h"
 #include "gmf-dialog.h"
+#include "gmf-info-win.h"
 
 #include <errno.h>
 #include <glib/gstdio.h>
@@ -23,7 +23,7 @@ G_LOCK_DEFINE_STATIC ( progress_copy );
 
 typedef unsigned int uint;
 
-enum cols
+enum cols_enm
 {
 	COL_PATH,
 	COL_NAME,
@@ -88,6 +88,7 @@ enum bt_ppa_enm
 enum bt_ppb_enm
 {
 	BTP_EDT,
+	BTP_NSL,
 	BTP_CPY,
 	BTP_CUT,
 	BTP_RMV,
@@ -108,6 +109,7 @@ const char *bpa_icon_n[BTP_AAL] =
 const char *bpb_icon_n[BTP_BAL] = 
 {
 	[BTP_EDT] = "gtk-edit",
+	[BTP_NSL] = "emblem-symbolic-link",
 	[BTP_CPY] = "edit-copy", 
 	[BTP_CUT] = "edit-cut",
 	[BTP_RMV] = "remove",
@@ -140,6 +142,8 @@ struct _GmfWin
 	GtkButton  *button_search;
 	GtkPopover *popover_jump;
 	GtkPopover *popover_search;
+
+	GtkEntry *entry_target;
 
 	GFile *file;
 	GFileMonitor *monitor;
@@ -214,7 +218,7 @@ static void copy_file_progress ( int64_t current, int64_t total, gpointer data )
 
 		if ( current == total )
 		{
-			if ( win->size_file == (uint64_t)total ) { win->size_file_copy += total; win->size_file = 0; } else win->size_file = total;
+			if ( win->size_file == (uint64_t)total ) { win->size_file_copy += (uint64_t)total; win->size_file = 0; } else win->size_file = (uint64_t)total;
 		}
 
 	G_UNLOCK ( progress_copy );
@@ -751,30 +755,38 @@ static void gmf_win_rld ( GmfWin *win )
 	gmf_win_icon_open_location ( path, NULL, win );
 }
 
-static void gmf_win_inf ( GmfWin *win )
+static char * gmf_win_get_selected_path ( enum cols_enm num, GmfWin *win )
 {
-	GtkTreeIter iter;
-	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
+	char *path = NULL;
 
 	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
 
-	g_autofree char *dir = g_file_get_path ( win->file );
-	double opacity = gtk_widget_get_opacity ( GTK_WIDGET ( win ) );
-
-	if ( !list ) { info_win_new ( I_SEL_0, dir, NULL, opacity ); return; }
-
 	if ( g_list_length ( list ) == 1 )
 	{
-		char *path = NULL;
+		GtkTreeIter iter;
+		GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
+
 		gtk_tree_model_get_iter ( model, &iter, (GtkTreePath *)list->data );
-		gtk_tree_model_get ( model, &iter, COL_PATH, &path, -1 );
-
-		info_win_new ( I_SEL_1, dir, path, opacity );
-
-		free ( path );
+		gtk_tree_model_get ( model, &iter, num, &path, -1 );
 	}
 
 	g_list_free_full ( list, (GDestroyNotify) gtk_tree_path_free );
+
+	return path;
+}
+
+static void gmf_win_inf ( GmfWin *win )
+{
+	g_autofree char *path = gmf_win_get_selected_path ( COL_PATH, win );
+
+	g_autofree char *dir = g_file_get_path ( win->file );
+
+	double opacity = gtk_widget_get_opacity ( GTK_WIDGET ( win ) );
+
+	if ( path )
+		info_win_new ( I_SEL_1, dir, path, opacity );
+	else
+		info_win_new ( I_SEL_0, dir, NULL, opacity );
 }
 
 static void gmf_win_prf ( GmfWin *win )
@@ -828,7 +840,7 @@ static GtkBox * gmf_win_bar_create ( GmfWin *win )
 
 static char * gmf_win_open_dir ( const char *dir, GtkWindow *window )
 {
-	return gmf_dialog_open_dir ( dir, "gtk-open", "document-open", GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, window );
+	return gmf_dialog_open_dir_file ( dir, "gtk-open", "document-open", GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, window );
 }
 
 static void gmf_win_popover_jump ( GtkEntry *entry, GtkEntryIconPosition icon_pos, UNUSED GdkEventButton *event, GmfWin *win )
@@ -940,33 +952,20 @@ static void gmf_win_popover_file_new ( GtkEntry *entry, GtkEntryIconPosition ico
 
 static void gmf_win_name_new ( GtkEntry *entry, GmfWin *win )
 {
-	GtkTreeIter iter;
-	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
+	g_autofree char *path = gmf_win_get_selected_path ( COL_PATH, win );
 
-	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
+	if ( !path ) return;
 
-	if ( !list ) return;
+	const char *text = gtk_entry_get_text ( entry );
 
-	if ( g_list_length ( list ) == 1 )
-	{
-		char *path = NULL;
-		gtk_tree_model_get_iter ( model, &iter, (GtkTreePath *)list->data );
-		gtk_tree_model_get ( model, &iter, COL_PATH, &path, -1 );
+	GFile *file = g_file_new_for_path ( path );
 
-		const char *text = gtk_entry_get_text ( entry );
+	GError *error = NULL;
+	g_file_set_display_name ( file, text, NULL, &error );
 
-		GFile *file = g_file_new_for_path ( path );
+	if ( error ) { gmf_dialog_message ( " ", error->message, GTK_MESSAGE_ERROR, GTK_WINDOW ( win ) ); g_error_free ( error ); }
 
-		GError *error = NULL;
-		g_file_set_display_name ( file, text, NULL, &error );
-
-		if ( error ) { gmf_dialog_message ( " ", error->message, GTK_MESSAGE_ERROR, GTK_WINDOW ( win ) ); g_error_free ( error ); }
-
-		free ( path );
-		g_object_unref ( file );
-	}
-
-	g_list_free_full ( list, (GDestroyNotify) gtk_tree_path_free );
+	g_object_unref ( file );
 
 	GtkWidget *popover = gtk_widget_get_parent ( GTK_WIDGET ( entry ) );
 	gtk_widget_set_visible ( popover, FALSE );
@@ -1050,7 +1049,7 @@ static void gmf_win_set_clipboard ( GmfWin *win )
 
 	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
 
-	if ( !list ) return;
+	if ( !list ) { g_list_free ( list ); return; }
 
 	uint16_t j = 0;
 	GString *gstring = g_string_new ( NULL );
@@ -1120,21 +1119,9 @@ static void gmf_win_tmn ( GmfWin *win )
 
 static void gmf_win_edt ( GmfWin *win )
 {
-	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
-	uint length = g_list_length ( list );
+	g_autofree char *name = gmf_win_get_selected_path ( COL_NAME, win );
 
-	if ( !list ) return;
-
-	GtkTreeIter iter;
-	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
-
-	g_autofree char *name = NULL;
-	gtk_tree_model_get_iter ( model, &iter, (GtkTreePath *)list->data );
-	gtk_tree_model_get ( model, &iter, COL_NAME, &name, -1 );
-
-	g_list_free_full ( list, (GDestroyNotify) gtk_tree_path_free );
-
-	if ( length != 1 ) return;
+	if ( !name ) return;
 
 	GtkPopover *popover = gmf_win_popover_df_new ( NULL, "gtk-edit", name, ACT_EDT, win );
 
@@ -1158,12 +1145,12 @@ static void gmf_win_cut ( GmfWin *win )
 
 static void gmf_win_rmv ( GmfWin *win )
 {
-	GtkTreeIter iter;
-	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
-
 	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
 
-	if ( !list ) return;
+	if ( !list ) { g_list_free ( list ); return; }
+
+	GtkTreeIter iter;
+	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
 
 	while ( list != NULL )
 	{
@@ -1192,12 +1179,11 @@ static void gmf_win_arc ( GmfWin *win )
 	g_autofree char *prog_roller = g_find_program_in_path ( "file-roller" );
 	g_autofree char *prog_engrampa = g_find_program_in_path ( "engrampa" );
 
-	if ( !prog_roller && !prog_engrampa )
-	{
-		gmf_dialog_message ( "Not Found:", "File-roller or Engrampa", GTK_MESSAGE_WARNING, GTK_WINDOW ( win ) );
+	if ( !prog_roller && !prog_engrampa ) { gmf_dialog_message ( "Not Found:", "File-roller or Engrampa", GTK_MESSAGE_WARNING, GTK_WINDOW ( win ) ); return; }
 
-		return;
-	}
+	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
+
+	if ( !list ) { g_list_free ( list ); return; }
 
 	const char *cmd = ( !prog_roller && prog_engrampa ) ? "engrampa --add " : "file-roller --add ";
 
@@ -1205,10 +1191,6 @@ static void gmf_win_arc ( GmfWin *win )
 
 	GtkTreeIter iter;
 	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
-
-	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
-
-	if ( !list ) return;
 
 	while ( list != NULL )
 	{
@@ -1231,28 +1213,91 @@ static void gmf_win_arc ( GmfWin *win )
 
 static void gmf_win_run ( GmfWin *win )
 {
-	GtkTreeIter iter;
-	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
+	g_autofree char *path = gmf_win_get_selected_path ( COL_PATH, win );
 
-	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
+	if ( !path ) return;
 
-	if ( !list ) return;
+	GFile *file = g_file_new_for_path ( path );
 
-	if ( g_list_length ( list ) == 1 )
-	{
-		char *path = NULL;
-		gtk_tree_model_get_iter ( model, &iter, (GtkTreePath *)list->data );
-		gtk_tree_model_get ( model, &iter, COL_PATH, &path, -1 );
+	gmf_dialog_app_chooser ( file, GTK_WINDOW ( win ) );
 
-		GFile *file = g_file_new_for_path ( path );
+	g_object_unref ( file );
+}
 
-		gmf_dialog_app_chooser ( file, GTK_WINDOW ( win ) );
+static void gmf_win_link_new ( GtkEntry *entry, GmfWin *win )
+{
+	const char *link   = gtk_entry_get_text ( entry );
+	const char *target = gtk_entry_get_text ( win->entry_target );
 
-		free ( path );
-		g_object_unref ( file );
-	}
+	if ( !g_file_test ( target, G_FILE_TEST_EXISTS ) ) { gmf_dialog_message ( "", g_strerror ( errno ), GTK_MESSAGE_WARNING, GTK_WINDOW ( win ) ); return; }
 
-	g_list_free_full ( list, (GDestroyNotify) gtk_tree_path_free );
+	GFile *file_link = g_file_new_for_path ( link );
+
+	GError *error = NULL;
+	g_file_make_symbolic_link ( file_link, target, NULL, &error );
+
+	if ( error ) { gmf_dialog_message ( " ", error->message, GTK_MESSAGE_ERROR, GTK_WINDOW ( win ) ); g_error_free ( error ); }
+
+	g_object_unref ( file_link );
+
+	GtkWidget *popover = gtk_widget_get_parent ( gtk_widget_get_parent ( GTK_WIDGET ( entry ) ) );
+	gtk_widget_set_visible ( popover, FALSE );
+}
+
+static void gmf_win_activate_link ( GtkEntry *entry, GmfWin *win )
+{
+	gmf_win_link_new ( entry, win );
+}
+
+static void gmf_win_icon_press_link_new ( GtkEntry *entry, GtkEntryIconPosition icon_pos, UNUSED GdkEventButton *event, GmfWin *win )
+{
+	if ( icon_pos == GTK_ENTRY_ICON_SECONDARY ) gmf_win_link_new ( entry, win );
+}
+
+static GtkPopover * gmf_win_popover_link_new ( const char *target, const char *link, GmfWin *win )
+{
+	GtkPopover *popover = (GtkPopover *)gtk_popover_new ( NULL );
+
+	GtkBox *vbox = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_VERTICAL, 5 );
+	gtk_box_set_spacing ( vbox, 5 );
+	gtk_widget_set_visible ( GTK_WIDGET ( vbox ), TRUE );
+
+	win->entry_target = (GtkEntry *)gtk_entry_new ();
+	g_object_set ( win->entry_target, "editable", FALSE, NULL );
+	gtk_entry_set_text ( win->entry_target, ( target ) ? target : "" );
+	gtk_widget_set_visible ( GTK_WIDGET ( win->entry_target ), TRUE );
+
+	gtk_widget_set_size_request ( GTK_WIDGET ( win->entry_target ), 300, -1 );
+	gtk_box_pack_start ( vbox, GTK_WIDGET ( win->entry_target ), FALSE, FALSE, 0 );
+
+	GtkEntry *entry_link = (GtkEntry *)gtk_entry_new ();
+	gtk_entry_set_text ( entry_link, ( link ) ? link : "" );
+	gtk_widget_set_visible ( GTK_WIDGET ( entry_link ), TRUE );
+
+	gtk_entry_set_icon_from_icon_name ( entry_link, GTK_ENTRY_ICON_SECONDARY, "emblem-symbolic-link" );
+
+	g_signal_connect ( entry_link, "activate",   G_CALLBACK ( gmf_win_activate_link ), win );
+	g_signal_connect ( entry_link, "icon-press", G_CALLBACK ( gmf_win_icon_press_link_new ), win );
+
+	gtk_box_pack_start ( vbox, GTK_WIDGET ( entry_link ), FALSE, FALSE, 0 );
+
+	gtk_container_add ( GTK_CONTAINER ( popover ), GTK_WIDGET ( vbox ) );
+
+	return popover;
+}
+
+static void gmf_win_fsl ( GmfWin *win )
+{
+	g_autofree char *path = gmf_win_get_selected_path ( COL_PATH, win );
+
+	if ( !path ) return;
+
+	g_autofree char *link = g_strdup_printf ( "%s-link", path );
+
+	GtkPopover *popover = gmf_win_popover_link_new ( path, link, win );
+
+	gtk_popover_set_relative_to ( popover, GTK_WIDGET ( win->button_act ) );
+	gtk_popover_popup ( popover );
 }
 
 static void gmf_win_signal_all_ppa_num ( GtkButton *button, GmfWin *win )
@@ -1274,7 +1319,7 @@ static void gmf_win_signal_all_ppb_num ( GtkButton *button, GmfWin *win )
 
 	uint8_t num = ( uint8_t )( atoi ( name ) );
 
-	fp funcs[] =  { gmf_win_edt, gmf_win_cpy, gmf_win_cut, gmf_win_rmv, gmf_win_arc, gmf_win_run };
+	fp funcs[] =  { gmf_win_edt, gmf_win_fsl, gmf_win_cpy, gmf_win_cut, gmf_win_rmv, gmf_win_arc, gmf_win_run };
 
 	if ( funcs[num] ) funcs[num] ( win );
 
@@ -1311,6 +1356,23 @@ static GtkPopover * gmf_win_pp_act_a ( GmfWin *win )
 	return popover;
 }
 
+static GtkButton * gmf_win_button_link ( const char *name )
+{
+	GtkButton *button = (GtkButton *)gtk_button_new ();
+
+	GIcon *gicon = g_themed_icon_new ( name );
+	GIcon *emblemed = emblemed_icon ( "emblem-symbolic-link", "add", gicon );
+
+	GtkImage *image = (GtkImage *)gtk_image_new_from_gicon ( emblemed, GTK_ICON_SIZE_MENU );
+
+	gtk_button_set_image ( button, GTK_WIDGET ( image ) );
+
+	g_object_unref ( gicon );
+	g_object_unref ( emblemed );
+
+	return button;
+}
+
 static GtkPopover * gmf_win_pp_act_b ( GmfWin *win )
 {
 	GtkPopover *popover = (GtkPopover *)gtk_popover_new ( NULL );
@@ -1322,7 +1384,7 @@ static GtkPopover * gmf_win_pp_act_b ( GmfWin *win )
 
 	for ( n = BTP_EDT; n < BTP_BAL; n++ )
 	{
-		GtkButton *button = (GtkButton *)gtk_button_new_from_icon_name ( bpb_icon_n[n], GTK_ICON_SIZE_MENU );
+		GtkButton *button = ( n == BTP_NSL ) ? gmf_win_button_link ( bpb_icon_n[n] ) : (GtkButton *)gtk_button_new_from_icon_name ( bpb_icon_n[n], GTK_ICON_SIZE_MENU );
 		g_signal_connect ( button, "clicked", G_CALLBACK ( gmf_win_signal_all_ppb_num ), win );
 
 		char buf[10];
@@ -1389,7 +1451,7 @@ static void gmf_win_button_tab_set_tab ( const char *path, GmfWin *win )
 		l = l->next;
 	}
 
-	g_list_free_full ( l, (GDestroyNotify) g_free );
+	g_list_free_full ( l, (GDestroyNotify) free );
 }
 
 static void gmf_win_clicked_button_tab ( GtkButton *button, GmfWin *win )
@@ -1433,34 +1495,80 @@ static GtkPopover * gmf_win_pp_tab ( GmfWin *win )
 
 // ***** Icon-View *****
 
-static inline gboolean gmf_win_link_exists ( const char *path, const char *link )
+static inline GIcon * gmf_win_emblemed_icon ( const char *name_1, const char *name_2, GIcon *gicon )
 {
-	gboolean link_exist = FALSE;
-
-	if ( !g_path_is_absolute ( link ) )
-	{
-		g_autofree char *dir_name = g_path_get_dirname ( path );
-		g_autofree char *new_name = g_build_filename ( dir_name, link, NULL );
-
-		link_exist = g_file_test ( new_name, G_FILE_TEST_EXISTS );
-	}
-	else
-		link_exist = g_file_test ( link, G_FILE_TEST_EXISTS );
-
-	return link_exist;
-}
-
-static inline GIcon * gmf_win_emblemed_icon ( const char *name, GIcon *gicon )
-{
-	GIcon *e_icon = g_themed_icon_new ( name );
+	GIcon *e_icon = g_themed_icon_new ( name_1 );
 	GEmblem *emblem  = g_emblem_new ( e_icon );
 
 	GIcon *emblemed  = g_emblemed_icon_new ( gicon, emblem );
+
+	if ( name_2 )
+	{
+		GIcon *e_icon_2 = g_themed_icon_new ( name_2 );
+		GEmblem *emblem_2  = g_emblem_new ( e_icon_2 );
+
+		g_emblemed_icon_add_emblem ( G_EMBLEMED_ICON ( emblemed ), emblem_2 );
+
+		g_object_unref ( e_icon_2 );
+		g_object_unref ( emblem_2 );
+	}
 
 	g_object_unref ( e_icon );
 	g_object_unref ( emblem );
 
 	return emblemed;
+}
+
+static inline GdkPixbuf * gmf_win_desktop_app_get_pixbuf ( const char *path, uint16_t icon_size )
+{
+	GdkPixbuf *pixbuf = NULL;
+
+	GDesktopAppInfo *d_app = g_desktop_app_info_new_from_filename ( path );
+
+	g_autofree char *icon = ( d_app ) ? g_desktop_app_info_get_string ( d_app, "Icon" ) : NULL;
+
+	if ( icon ) pixbuf = gtk_icon_theme_load_icon ( gtk_icon_theme_get_default (), icon, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR, NULL );
+
+	if ( d_app ) g_object_unref ( d_app );
+
+	return pixbuf;
+}
+
+static inline GtkIconInfo * gmf_win_get_icon_info ( const char *content_type, gboolean is_link, uint16_t icon_size, GFileInfo *finfo )
+{
+	GtkIconInfo *icon_info = NULL;
+
+	GtkIconTheme *icon_theme = gtk_icon_theme_get_default ();
+	GIcon *unknown = NULL, *emblemed = NULL, *gicon = g_file_info_get_icon ( finfo );
+
+	if ( gicon )
+	{
+		if ( is_link ) emblemed = gmf_win_emblemed_icon ( "emblem-symbolic-link", NULL, gicon );
+
+		icon_info = gtk_icon_theme_lookup_by_gicon ( icon_theme, ( is_link ) ? emblemed : gicon, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+	}
+
+	if ( !icon_info )
+	{
+		unknown = g_themed_icon_new ( "unknown" );
+
+		if ( is_link )
+		{
+			if ( emblemed ) g_object_unref ( emblemed );
+
+			if ( content_type && g_str_has_prefix ( content_type, "inode/symlink" ) ) 
+				emblemed = gmf_win_emblemed_icon ( "dialog-error", "emblem-symbolic-link", unknown );
+			else
+				emblemed = gmf_win_emblemed_icon ( "emblem-symbolic-link", NULL, unknown );
+		}
+
+		icon_info = gtk_icon_theme_lookup_by_gicon ( icon_theme, ( is_link ) ? emblemed : unknown, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+	}
+
+	if ( unknown ) g_object_unref ( unknown );
+	if ( emblemed ) g_object_unref ( emblemed );
+
+	return icon_info;
 }
 
 static GdkPixbuf * gmf_win_icon_get_pixbuf ( const char *path, gboolean is_link, uint16_t icon_size )
@@ -1470,37 +1578,19 @@ static GdkPixbuf * gmf_win_icon_get_pixbuf ( const char *path, gboolean is_link,
 	GFile *file = g_file_new_for_path ( path );
 	GFileInfo *finfo = g_file_query_info ( file, "*", 0, NULL, NULL );
 
+	gboolean is_dir = g_file_test ( path, G_FILE_TEST_IS_DIR );
 	const char *content_type = ( finfo ) ? g_file_info_get_content_type ( finfo ) : NULL;
 
-	if ( content_type && g_str_has_prefix ( content_type, "image" ) ) pixbuf = gdk_pixbuf_new_from_file_at_size ( path, icon_size, icon_size, NULL );
+	if ( !is_link && content_type && g_str_has_prefix ( content_type, "image" ) ) pixbuf = gdk_pixbuf_new_from_file_at_size ( path, icon_size, icon_size, NULL );
 
-	if ( finfo && pixbuf == NULL )
+	if ( !pixbuf && !is_dir && content_type && g_str_equal ( content_type, "application/x-desktop" ) ) pixbuf = gmf_win_desktop_app_get_pixbuf ( path, icon_size );
+
+	if ( finfo && !pixbuf )
 	{
-		GtkIconInfo *icon_info = NULL;
-		GIcon *emblemed = NULL, *unknown = NULL, *gicon = g_file_info_get_icon ( finfo );
-
-		if ( is_link )
-		{
-			gboolean is_exist = FALSE;
-			const char *target = g_file_info_get_symlink_target ( finfo );
-
-			if ( target ) is_exist = gmf_win_link_exists ( path, target );
-
-			if ( !is_exist ) unknown = g_themed_icon_new ( "unknown" );
-
-			emblemed = ( is_exist ) ? gmf_win_emblemed_icon ( "emblem-symbolic-link", gicon ) : gmf_win_emblemed_icon ( "error", unknown );
-
-			icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), emblemed, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
-		}
-		else
-			icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), gicon, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
-
-		// if ( !icon_info ) icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), unknown, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+		GtkIconInfo *icon_info = gmf_win_get_icon_info ( content_type, is_link, icon_size, finfo );
 
 		if ( icon_info ) pixbuf = gtk_icon_info_load_icon ( icon_info, NULL );
 
-		if ( unknown ) g_object_unref ( unknown );
-		if ( emblemed ) g_object_unref ( emblemed );
 		if ( icon_info ) g_object_unref ( icon_info );
 	}
 
@@ -1632,8 +1722,10 @@ static void gmf_win_icon_open_location ( const char *path_dir, const char *searc
 
 			ulong size = get_file_size ( path );
 
-			GdkPixbuf *pixbuf = ( win->preview && nums < PREVIEW ) ? pixbuf = gmf_win_icon_get_pixbuf ( path, is_slk, win->icon_size ) 
+			GdkPixbuf *pixbuf = ( win->preview && nums < PREVIEW ) ? gmf_win_icon_get_pixbuf ( path, is_slk, win->icon_size ) 
 				: gtk_icon_theme_load_icon ( itheme, ( is_dir ) ? icon_name_d : icon_name_f, win->icon_size, GTK_ICON_LOOKUP_FORCE_SIZE, NULL );
+
+			if ( !pixbuf ) pixbuf = gtk_icon_theme_load_icon ( itheme, ( is_dir ) ? icon_name_d : "unknown", win->icon_size, GTK_ICON_LOOKUP_FORCE_SIZE, NULL );
 
 			gtk_list_store_append ( GTK_LIST_STORE ( model ), &iter );
 
@@ -1695,9 +1787,9 @@ static GdkPixbuf * gmf_icon_pixbuf_add_text ( const char *fsize, int icon_size, 
 
 static void gmf_win_icon_changed ( const char *path_f, GmfWin *win )
 {
-	GtkTreeIter iter;
 	GList *list = gtk_icon_view_get_selected_items ( win->icon_view );
 
+	GtkTreeIter iter;
 	GtkTreeModel *model = gtk_icon_view_get_model ( win->icon_view );
 
 	while ( list != NULL )
@@ -1835,7 +1927,7 @@ static void gmf_win_icon_selection_changed ( UNUSED GtkIconView *icon_view, GmfW
 	g_timeout_add ( 1000, (GSourceFunc)gmf_win_icon_changed_timeout, win );
 }
 
-static int gmf_win_icon_sort_func_a_z ( GtkTreeModel *model, GtkTreeIter *a, GtkTreeIter *b, UNUSED gpointer data )
+static int gmf_win_icon_sort_func_az_sz ( gboolean a_z, gboolean sz, gboolean sz_ud, GtkTreeModel *model, GtkTreeIter *a, GtkTreeIter *b )
 {
 	int ret = 1;
 	gboolean is_dir_a, is_dir_b;
@@ -1852,73 +1944,44 @@ static int gmf_win_icon_sort_func_a_z ( GtkTreeModel *model, GtkTreeIter *a, Gtk
 		ret = -1;
 	else
 	{
-		g_autofree char *na = g_utf8_collate_key_for_filename ( name_a, -1 );
-		g_autofree char *nb = g_utf8_collate_key_for_filename ( name_b, -1 );
+		if ( sz )
+		{
+			uint64_t size_a = 0, size_b = 0;
+			gtk_tree_model_get ( model, a, COL_SIZE, &size_a, -1 );
+			gtk_tree_model_get ( model, b, COL_SIZE, &size_b, -1 );
 
-		ret = g_strcmp0 ( na, nb );
+			ret = ( sz_ud ) ? ( ( size_a >= size_b ) ? 1 : 0 ) : ( ( size_a <= size_b ) ? 1 : 0 );
+		}
+		else
+		{
+			g_autofree char *na = g_utf8_collate_key_for_filename ( name_a, -1 );
+			g_autofree char *nb = g_utf8_collate_key_for_filename ( name_b, -1 );
 
-		// ret = g_utf8_collate ( name_a, name_b );
+			ret = ( a_z ) ? g_strcmp0 ( na, nb ) : g_strcmp0 ( nb, na );
+		}
 	}
 
 	return ret;
+}
+
+static int gmf_win_icon_sort_func_a_z ( GtkTreeModel *model, GtkTreeIter *a, GtkTreeIter *b, UNUSED gpointer data )
+{
+	return gmf_win_icon_sort_func_az_sz ( TRUE, FALSE, FALSE, model, a, b );
 }
 
 static int gmf_win_icon_sort_func_z_a ( GtkTreeModel *model, GtkTreeIter *a, GtkTreeIter *b, UNUSED gpointer data )
 {
-	int ret = 1;
-	gboolean is_dir_a, is_dir_b;
-
-	g_autofree char *name_a = NULL;
-	g_autofree char *name_b = NULL;
-
-	gtk_tree_model_get ( model, a, COL_IS_DIR, &is_dir_a, COL_NAME, &name_a, -1 );
-	gtk_tree_model_get ( model, b, COL_IS_DIR, &is_dir_b, COL_NAME, &name_b, -1 );
-
-	if ( !is_dir_b && is_dir_a )
-		ret = 1;
-	else if ( is_dir_b && !is_dir_a )
-		ret = -1;
-	else
-	{
-		g_autofree char *na = g_utf8_collate_key_for_filename ( name_a, -1 );
-		g_autofree char *nb = g_utf8_collate_key_for_filename ( name_b, -1 );
-
-		ret = g_strcmp0 ( nb, na );
-
-		// ret = g_utf8_collate ( name_b, name_a );
-	}
-
-	return ret;
+	return gmf_win_icon_sort_func_az_sz ( FALSE, FALSE, FALSE, model, a, b );
 }
 
 static int gmf_win_icon_sort_func_m_g ( GtkTreeModel *model, GtkTreeIter *a, GtkTreeIter *b, UNUSED gpointer data )
 {
-	int ret = 1;
-
-	uint64_t size_a = 0;
-	uint64_t size_b = 0;
-
-	gtk_tree_model_get ( model, a, COL_SIZE, &size_a, -1 );
-	gtk_tree_model_get ( model, b, COL_SIZE, &size_b, -1 );
-
-	ret = ( size_a >= size_b ) ? 1 : 0;
-
-	return ret;
+	return gmf_win_icon_sort_func_az_sz ( FALSE, TRUE, TRUE, model, a, b );
 }
 
 static int gmf_win_icon_sort_func_g_m ( GtkTreeModel *model, GtkTreeIter *a, GtkTreeIter *b, UNUSED gpointer data )
 {
-	int ret = 1;
-
-	uint64_t size_a = 0;
-	uint64_t size_b = 0;
-
-	gtk_tree_model_get ( model, a, COL_SIZE, &size_a, -1 );
-	gtk_tree_model_get ( model, b, COL_SIZE, &size_b, -1 );
-
-	ret = ( size_a <= size_b ) ? 1 : 0;
-
-	return ret;
+	return gmf_win_icon_sort_func_az_sz ( FALSE, TRUE, FALSE, model, a, b );
 }
 
 static void gmf_win_icon_set_sort_func ( uint num, GmfWin *win )

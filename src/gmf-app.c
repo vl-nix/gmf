@@ -51,4 +51,3 @@ GmfApp * gmf_app_new ( void )
 {
 	return g_object_new ( GMF_TYPE_APP, "application-id", "org.gtk.gmf", "flags", G_APPLICATION_HANDLES_OPEN | G_APPLICATION_NON_UNIQUE, NULL );
 }
-

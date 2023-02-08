@@ -23,38 +23,65 @@ ulong get_file_size ( const char *file )
 	return (ulong)size;
 }
 
-gboolean link_exists ( const char *path )
+GIcon * emblemed_icon ( const char *name_1, const char *name_2, GIcon *gicon )
 {
-	gboolean link_exist = FALSE;
-
-	g_autofree char *link = g_file_read_link ( path, NULL );
-
-	if ( !link ) return FALSE;
-
-	if ( !g_path_is_absolute ( link ) )
-	{
-		g_autofree char *dirname = g_path_get_dirname ( path );
-		g_autofree char *real = g_build_filename ( dirname, link, NULL );
-
-		link_exist = g_file_test ( real, G_FILE_TEST_EXISTS );
-	}
-	else
-		link_exist = g_file_test ( link, G_FILE_TEST_EXISTS );
-
-	return link_exist;
-}
-
-GIcon * emblemed_icon ( const char *name, GIcon *gicon )
-{
-	GIcon *e_icon = g_themed_icon_new ( name );
+	GIcon *e_icon = g_themed_icon_new ( name_1 );
 	GEmblem *emblem  = g_emblem_new ( e_icon );
 
 	GIcon *emblemed  = g_emblemed_icon_new ( gicon, emblem );
+
+	if ( name_2 )
+	{
+		GIcon *e_icon_2 = g_themed_icon_new ( name_2 );
+		GEmblem *emblem_2  = g_emblem_new ( e_icon_2 );
+
+		g_emblemed_icon_add_emblem ( G_EMBLEMED_ICON ( emblemed ), emblem_2 );
+
+		g_object_unref ( e_icon_2 );
+		g_object_unref ( emblem_2 );
+	}
 
 	g_object_unref ( e_icon );
 	g_object_unref ( emblem );
 
 	return emblemed;
+}
+
+static inline GtkIconInfo * get_icon_info ( const char *content_type, gboolean is_link, uint16_t icon_size, GFileInfo *finfo )
+{
+	GtkIconInfo *icon_info = NULL;
+
+	GtkIconTheme *icon_theme = gtk_icon_theme_get_default ();
+	GIcon *unknown = NULL, *emblemed = NULL, *gicon = g_file_info_get_icon ( finfo );
+
+	if ( gicon )
+	{
+		if ( is_link ) emblemed = emblemed_icon ( "emblem-symbolic-link", NULL, gicon );
+
+		icon_info = gtk_icon_theme_lookup_by_gicon ( icon_theme, ( is_link ) ? emblemed : gicon, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+	}
+
+	if ( !icon_info )
+	{
+		unknown = g_themed_icon_new ( "unknown" );
+
+		if ( is_link )
+		{
+			if ( emblemed ) g_object_unref ( emblemed );
+
+			if ( content_type && g_str_has_prefix ( content_type, "inode/symlink" ) ) 
+				emblemed = emblemed_icon ( "dialog-error", "emblem-symbolic-link", unknown );
+			else
+				emblemed = emblemed_icon ( "emblem-symbolic-link", NULL, unknown );
+		}
+
+		icon_info = gtk_icon_theme_lookup_by_gicon ( icon_theme, ( is_link ) ? emblemed : unknown, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+	}
+
+	if ( unknown ) g_object_unref ( unknown );
+	if ( emblemed ) g_object_unref ( emblemed );
+
+	return icon_info;
 }
 
 GdkPixbuf * get_pixbuf ( const char *path, gboolean is_link, uint16_t icon_size )
@@ -64,33 +91,14 @@ GdkPixbuf * get_pixbuf ( const char *path, gboolean is_link, uint16_t icon_size 
 	GFile *file = g_file_new_for_path ( path );
 	GFileInfo *finfo = g_file_query_info ( file, "*", 0, NULL, NULL );
 
+	const char *content_type = ( finfo ) ? g_file_info_get_content_type ( finfo ) : NULL;
+
 	if ( finfo )
 	{
-		GtkIconInfo *icon_info = NULL;
-		GIcon *emblemed = NULL, *unknown = NULL, *gicon = g_file_info_get_icon ( finfo );
-
-		if ( is_link )
-		{
-			gboolean is_exist = FALSE;
-			const char *target = g_file_info_get_symlink_target ( finfo );
-
-			if ( target ) is_exist = link_exists ( path );
-
-			if ( !is_exist ) unknown = g_themed_icon_new ( "unknown" );
-
-			emblemed = ( is_exist ) ? emblemed_icon ( "emblem-symbolic-link", gicon ) : emblemed_icon ( "error", unknown );
-
-			icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), emblemed, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
-		}
-		else
-			icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), gicon, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
-
-		// if ( !icon_info ) icon_info = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), unknown, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+		GtkIconInfo *icon_info = get_icon_info ( content_type, is_link, icon_size, finfo );
 
 		if ( icon_info ) pixbuf = gtk_icon_info_load_icon ( icon_info, NULL );
 
-		if ( unknown ) g_object_unref ( unknown );
-		if ( emblemed ) g_object_unref ( emblemed );
 		if ( icon_info ) g_object_unref ( icon_info );
 	}
 
@@ -134,7 +142,7 @@ void gmf_dialog_message ( const char *f_error, const char *file_or_info, GtkMess
 	gtk_widget_destroy ( GTK_WIDGET ( dialog ) );
 }
 
-char * gmf_dialog_open_dir ( const char *path, const char *accept, const char *icon, uint8_t num, GtkWindow *window )
+char * gmf_dialog_open_dir_file ( const char *path, const char *accept, const char *icon, uint8_t num, GtkWindow *window )
 {
 	GtkFileChooserDialog *dialog = ( GtkFileChooserDialog *)gtk_file_chooser_dialog_new ( " ", window, num, "gtk-cancel", GTK_RESPONSE_CANCEL, accept, GTK_RESPONSE_ACCEPT, NULL );
 
@@ -177,15 +185,9 @@ void gmf_dialog_app_chooser ( GFile *file, GtkWindow *window )
 
 				g_app_info_launch ( app_info, list_f, NULL, &error );
 
-				if ( error )
-				{
-					gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window );
-
-					g_error_free ( error );
-				}
+				if ( error ) { gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window ); g_error_free ( error ); }
 
 				g_list_free ( list_f );
-
 				g_object_unref ( app_info );
 			}
 
@@ -201,22 +203,14 @@ void gmf_dialog_app_chooser ( GFile *file, GtkWindow *window )
 
 void gmf_launch_cmd ( const char *cmd, GtkWindow *window )
 {
+	GError *error = NULL;
 	GAppInfo *app = g_app_info_create_from_commandline ( cmd, NULL, 0, NULL );
 
-	if ( app )
-	{
-		GError *error = NULL;
-		g_app_info_launch ( app, NULL, NULL, &error );
+	if ( app ) g_app_info_launch ( app, NULL, NULL, &error );
 
-		if ( error )
-		{
-			gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window );
+	if ( error ) { gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window ); g_error_free ( error ); }
 
-			g_error_free ( error );
-		}
-
-		g_object_unref ( app );
-	}
+	if ( app ) g_object_unref ( app );
 }
 
 static void gmf_launch_app ( GFile *file, GtkWindow *window )
@@ -228,11 +222,11 @@ static void gmf_launch_app ( GFile *file, GtkWindow *window )
 
 	GFileInfo *file_info = g_file_query_info ( file, "standard::*", 0, NULL, NULL );
 
-	const char *mime_type = ( file_info ) ? g_file_info_get_content_type ( file_info ) : NULL;
+	const char *content_type = ( file_info ) ? g_file_info_get_content_type ( file_info ) : NULL;
 
-	GAppInfo *app_info = ( mime_type ) ? g_app_info_get_default_for_type ( mime_type, FALSE ) : NULL;
+	GAppInfo *app_info = ( content_type ) ? g_app_info_get_default_for_type ( content_type, FALSE ) : NULL;
 
-	g_app_info_launch ( app_info, list, NULL, &error );
+	if ( app_info  ) g_app_info_launch ( app_info, list, NULL, &error );
 
 	if ( error ) { gmf_dialog_message ( "", error->message, GTK_MESSAGE_WARNING, window ); g_error_free ( error ); }
 
@@ -250,12 +244,28 @@ void gmf_activated_file ( GFile *file, GtkWindow *window )
 	{
 		g_autofree char *path = g_file_get_path ( file );
 
-		const char *mime_type = g_file_info_get_content_type ( file_info );
+		gboolean is_exec = g_file_test ( path, G_FILE_TEST_IS_EXECUTABLE );
+		const char *content_type = g_file_info_get_content_type ( file_info );
 
-		g_debug ( "%s:: mime_type: %s ", __func__, mime_type );
+		g_debug ( "%s:: content_type: %s ", __func__, content_type );
 
-		if ( mime_type && g_str_equal ( mime_type, "application/x-executable" ) )
-			gmf_launch_cmd ( path, window );
+		if ( content_type && g_str_equal ( content_type, "application/x-desktop" ) )
+		{
+			GDesktopAppInfo *d_app = g_desktop_app_info_new_from_filename ( path );
+			g_autofree char *cmd = ( d_app ) ? g_desktop_app_info_get_string ( d_app, "Exec" ) : NULL;
+
+			if ( cmd ) gmf_launch_cmd ( cmd, window );
+
+			if ( d_app ) g_object_unref ( d_app );
+		}
+		else if ( content_type && ( g_str_equal ( content_type, "application/x-shellscript" ) || g_str_equal ( content_type, "application/x-perl" ) ) ) // add: text/x-python3
+		{
+			if ( is_exec ) gmf_launch_cmd ( path, window );
+		}
+		else if ( content_type && g_str_equal ( content_type, "application/x-executable" ) )
+		{
+			if ( is_exec ) gmf_launch_cmd ( path, window );
+		}
 		else
 			gmf_launch_app ( file, window );
 

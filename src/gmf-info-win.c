@@ -7,8 +7,8 @@
 * http://www.gnu.org/licenses/gpl-3.0.html
 */
 
-#include "info-win.h"
 #include "gmf-dialog.h"
+#include "gmf-info-win.h"
 
 #include <errno.h>
 #include <sys/stat.h>
@@ -121,7 +121,7 @@ static char * info_file_time_to_str ( uint64_t time )
 static void info_dialog_image_add_emblem ( const char *name, const char *name_em, uint8_t sz, GtkImage *image )
 {
 	GIcon *gicon = g_themed_icon_new ( name );
-	GIcon *emblemed = emblemed_icon ( name_em, gicon );
+	GIcon *emblemed = emblemed_icon ( name_em, NULL, gicon );
 
 	gtk_image_set_from_gicon ( image, emblemed, sz );
 
@@ -134,7 +134,7 @@ static GdkPixbuf * info_dialog_pixbuf_add_emblem ( const char *name, const char 
 	GdkPixbuf *pixbuf = NULL;
 
 	GIcon *gicon = g_themed_icon_new ( name );
-	GIcon *emblemed = emblemed_icon ( name_em, gicon );
+	GIcon *emblemed = emblemed_icon ( name_em, NULL, gicon );
 
 	GtkIconInfo *iinfo = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), emblemed, sz, GTK_ICON_LOOKUP_FORCE_SIZE );
 
@@ -489,7 +489,7 @@ static void info_win_create ( enum info_sel_enm num, const char *odir, const cha
 
 	GtkWindow *window = GTK_WINDOW ( win );
 
-	gtk_window_set_title ( window, "Info - Gmf" );
+	gtk_window_set_title ( window, " " );
 	gtk_window_set_default_size ( window, 400, -1 );
 	gtk_window_set_icon_name ( window, "dialog-information" );
 	gtk_window_set_position ( window, GTK_WIN_POS_CENTER );
@@ -506,12 +506,11 @@ static void info_win_create ( enum info_sel_enm num, const char *odir, const cha
 
 	gboolean is_dir  = g_file_test ( win->path, G_FILE_TEST_IS_DIR );
 	gboolean is_link = g_file_test ( win->path, G_FILE_TEST_IS_SYMLINK );
-	gboolean is_link_exist = ( is_link ) ? link_exists ( win->path ) : FALSE;
 
 	GFile *file = g_file_new_for_path ( win->path );
 	GFileInfo *finfo = g_file_query_info ( file, "*", 0, NULL, NULL );
 
-	g_autofree char *owner = g_file_info_get_attribute_as_string ( finfo, G_FILE_ATTRIBUTE_OWNER_USER );
+	g_autofree char *owner = g_file_info_get_attribute_as_string ( finfo, G_FILE_ATTRIBUTE_OWNER_USER  );
 	g_autofree char *group = g_file_info_get_attribute_as_string ( finfo, G_FILE_ATTRIBUTE_OWNER_GROUP );
 
 	uint32_t indx = 0;
@@ -526,8 +525,8 @@ static void info_win_create ( enum info_sel_enm num, const char *odir, const cha
 	entry = info_dialog_create_entry ( win->odir );
 	gtk_box_pack_start ( m_box, GTK_WIDGET ( entry ), FALSE, TRUE, 0 );
 
-	const char *mime_type = g_file_info_get_content_type ( finfo );
-	g_autofree char *description = ( mime_type ) ? g_content_type_get_description ( mime_type ) : NULL;
+	const char *content_type = g_file_info_get_content_type ( finfo );
+	g_autofree char *description = ( content_type ) ? g_content_type_get_description ( content_type ) : NULL;
 
 	GdkPixbuf *pixbuf = get_pixbuf ( win->path, is_link, 48 );
 
@@ -547,7 +546,7 @@ static void info_win_create ( enum info_sel_enm num, const char *odir, const cha
 	GtkLabel *label = info_dialog_create_label ( ( description ) ? description : "None", GTK_ALIGN_END );
 	gtk_box_pack_start ( m_box, GTK_WIDGET ( label ), FALSE, FALSE, 0 );
 
-	info_dialog_create_hdd ( ( ( is_link && !is_link_exist ) ) ? win->odir : win->path, m_box );
+	info_dialog_create_hdd ( win->odir, m_box );
 
 	label = info_dialog_create_label ( uog, GTK_ALIGN_CENTER );
 	gtk_box_pack_start ( m_box, GTK_WIDGET ( label ), FALSE, FALSE, 5 );
