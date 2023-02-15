@@ -61,21 +61,18 @@ static inline GtkIconInfo * get_icon_info ( const char *content_type, gboolean i
 		icon_info = gtk_icon_theme_lookup_by_gicon ( icon_theme, ( is_link ) ? emblemed : gicon, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
 	}
 
-	if ( !icon_info )
+	if ( !icon_info && is_link )
 	{
 		unknown = g_themed_icon_new ( "unknown" );
 
-		if ( is_link )
-		{
-			if ( emblemed ) g_object_unref ( emblemed );
+		if ( emblemed ) g_object_unref ( emblemed );
 
-			if ( content_type && g_str_has_prefix ( content_type, "inode/symlink" ) ) 
-				emblemed = emblemed_icon ( "dialog-error", "emblem-symbolic-link", unknown );
-			else
-				emblemed = emblemed_icon ( "emblem-symbolic-link", NULL, unknown );
-		}
+		if ( content_type && g_str_has_prefix ( content_type, "inode/symlink" ) ) 
+			emblemed = emblemed_icon ( "dialog-error", "emblem-symbolic-link", unknown );
+		else
+			emblemed = emblemed_icon ( "emblem-symbolic-link", NULL, unknown );
 
-		icon_info = gtk_icon_theme_lookup_by_gicon ( icon_theme, ( is_link ) ? emblemed : unknown, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
+		icon_info = gtk_icon_theme_lookup_by_gicon ( icon_theme, emblemed, icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR );
 	}
 
 	if ( unknown ) g_object_unref ( unknown );
@@ -91,6 +88,7 @@ GdkPixbuf * get_pixbuf ( const char *path, gboolean is_link, uint16_t icon_size 
 	GFile *file = g_file_new_for_path ( path );
 	GFileInfo *finfo = g_file_query_info ( file, "*", 0, NULL, NULL );
 
+	gboolean is_dir = g_file_test ( path, G_FILE_TEST_IS_DIR );
 	const char *content_type = ( finfo ) ? g_file_info_get_content_type ( finfo ) : NULL;
 
 	if ( finfo )
@@ -104,6 +102,8 @@ GdkPixbuf * get_pixbuf ( const char *path, gboolean is_link, uint16_t icon_size 
 
 	if ( finfo ) g_object_unref ( finfo );
 	if ( file  ) g_object_unref ( file  );
+
+	if ( !pixbuf ) pixbuf = gtk_icon_theme_load_icon ( gtk_icon_theme_get_default (), ( is_dir ) ? "folder" : "unknown", icon_size, GTK_ICON_LOOKUP_FORCE_REGULAR, NULL );
 
 	return pixbuf;
 }
@@ -257,10 +257,6 @@ void gmf_activated_file ( GFile *file, GtkWindow *window )
 			if ( cmd ) gmf_launch_cmd ( cmd, window );
 
 			if ( d_app ) g_object_unref ( d_app );
-		}
-		else if ( content_type && ( g_str_equal ( content_type, "application/x-shellscript" ) || g_str_equal ( content_type, "application/x-perl" ) ) ) // add: text/x-python3
-		{
-			if ( is_exec ) gmf_launch_cmd ( path, window );
 		}
 		else if ( content_type && g_str_equal ( content_type, "application/x-executable" ) )
 		{

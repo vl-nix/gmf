@@ -136,7 +136,7 @@ static GdkPixbuf * info_dialog_pixbuf_add_emblem ( const char *name, const char 
 	GIcon *gicon = g_themed_icon_new ( name );
 	GIcon *emblemed = emblemed_icon ( name_em, NULL, gicon );
 
-	GtkIconInfo *iinfo = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), emblemed, sz, GTK_ICON_LOOKUP_FORCE_SIZE );
+	GtkIconInfo *iinfo = gtk_icon_theme_lookup_by_gicon ( gtk_icon_theme_get_default (), emblemed, sz, GTK_ICON_LOOKUP_FORCE_REGULAR );
 
 	g_object_unref ( gicon );
 	g_object_unref ( emblemed );
@@ -274,7 +274,7 @@ static GtkTreeModel * gmf_info_create_combo_icon_store ( uint8_t len, const char
 	uint8_t i = 0; for ( i = 0; i < len; i++ )
 	{
 		GdkPixbuf *pixbuf = ( len == 4 && i == 2 ) ? info_dialog_pixbuf_add_emblem ( "system-users", "add", 24 )
-			: gtk_icon_theme_load_icon ( gtk_icon_theme_get_default (), icon_names[i], 24, GTK_ICON_LOOKUP_FORCE_SIZE, NULL );
+			: gtk_icon_theme_load_icon ( gtk_icon_theme_get_default (), icon_names[i], 24, GTK_ICON_LOOKUP_FORCE_REGULAR, NULL );
 
 		gtk_list_store_append ( store, &iter );
 		gtk_list_store_set    ( store, &iter, 0, pixbuf, -1 );
