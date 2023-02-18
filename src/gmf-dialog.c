@@ -124,7 +124,7 @@ void gmf_dialog_about ( GtkWindow *window )
 	gtk_about_dialog_set_license_type ( dialog, GTK_LICENSE_GPL_3_0 );
 	gtk_about_dialog_set_authors ( dialog, authors );
 	gtk_about_dialog_set_website ( dialog,   "https://github.com/vl-nix/gmf" );
-	gtk_about_dialog_set_copyright ( dialog, "Copyright 2022 Gmf" );
+	gtk_about_dialog_set_copyright ( dialog, "Copyright 2023 Gmf" );
 	gtk_about_dialog_set_comments  ( dialog, "File manager" );
 
 	gtk_dialog_run ( GTK_DIALOG (dialog) );

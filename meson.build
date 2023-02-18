@@ -1,4 +1,4 @@
-project('gmf', 'c', version: '23.2', meson_version: '>= 0.50.0', default_options: [ 'warning_level=2', 'c_std=gnu11'])
+project('gmf', 'c', version: '23.4', meson_version: '>= 0.50.0', default_options: [ 'warning_level=2', 'c_std=gnu11'])
 
 c_args = ['-DVERSION="' + meson.project_version() + '"']
 

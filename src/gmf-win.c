@@ -356,7 +356,7 @@ static void copy_dir_file ( const char *uri, GmfWin *win )
 
 	win->file_paste = g_file_new_build_filename ( dir, name, NULL );
 
-	GFileType ftype = g_file_query_file_type ( win->file_copy, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL );
+	GFileType ftype = g_file_query_file_type ( win->file_copy, G_FILE_QUERY_INFO_NONE, NULL );
 
 	if ( cm_num == MOVE )
 	{
@@ -1905,7 +1905,7 @@ static void gmf_win_icon_open_dir ( const char *path_dir, const char *search, Gm
 
 	g_list_free_full ( list, (GDestroyNotify) free );
 
-	if ( win->preview && nums >= items ) gmf_icon_update_pixbuf_all ( g_list_length ( list ), win ); else { if ( win->model_t ) g_object_unref ( win->model_t ); win->model_t = NULL; }
+	if ( win->preview && nums >= items ) gmf_icon_update_pixbuf_all ( nums, win ); else { if ( win->model_t ) g_object_unref ( win->model_t ); win->model_t = NULL; }
 
 	gtk_icon_view_scroll_to_path ( win->icon_view, gtk_tree_path_new_first (), FALSE, 0, 0 );
 }
@@ -2345,7 +2345,7 @@ static void gmf_win_icon_item_activated ( GtkIconView *icon_view, GtkTreePath *t
 	}
 }
 
-static gboolean gmf_win_icon_press_event ( UNUSED GtkDrawingArea *draw, GdkEventButton *event, GmfWin *win )
+static gboolean gmf_win_icon_press_event ( UNUSED GtkIconView *icon_view, GdkEventButton *event, GmfWin *win )
 {
 	if ( event->button == GDK_BUTTON_PRIMARY ) return GDK_EVENT_PROPAGATE;
 
